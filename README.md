@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/aqles/token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/aqles/token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-A dashboard ranking pre-token protocols by implied launch value, from a sealed DefiLlama snapshot — with a farm plan for every protocol. The radar-2 model prices each protocol off its own category's market multiple, its seven-day momentum, its age without a token, and its chain breadth. Wrapped, staked and bridged products are left out of the board and listed with their reasons.
+A dashboard ranking pre-token protocols by implied launch value, from a sealed DefiLlama snapshot — with a farm plan for every protocol. The radar-2 model prices each protocol off its category's market multiple (the global median where a category has fewer than three trading peers), its seven-day momentum, its age without a token, and its chain breadth. Wrapped, staked and bridged products are left out of the board and listed with their reasons.
 
 ## Run it
 

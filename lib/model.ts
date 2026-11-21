@@ -306,7 +306,7 @@ export function isPreToken(p: SnapshotProtocol): boolean {
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
 /** Categories that are a wrapped, staked or bridged product of a token that already trades. */
-const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Cross Chain Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
 
 /** Exchange names a fresh launch never starts with. */
 const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
@@ -467,14 +467,182 @@ function weeklyFor(p: SnapshotProtocol): string {
   return 'a deposit, a swap, or a vote';
 }
 
+/** One curated farm plan: six steps, each an action with a cost and a time. */
+type CuratedPlan = (capital: number, hold: number) => FarmStep[];
+
+/** The shared first step: a fresh wallet that holds only the farm funds. */
+const FRESH_WALLET: FarmStep = {
+  text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.',
+  cost: 'under $3 of gas for the first transaction',
+  time: '5 minutes',
+};
+
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived
- * from the protocol's own record (category, chains, TVL, age), never from a hand-written list.
+ * Curated farm plans for the board's top protocols, keyed by slug. Each plan names the
+ * protocol's own vault, pool or points program, verified against the protocol's own docs or a
+ * primary source; a protocol with no verified program says so in its plan instead of naming
+ * one. Amounts and hold windows still come from the model's own tiers (capitalFor,
+ * holdDaysFor), so the numbers stay data-driven. Slugs not listed here use the template
+ * below: Nonce Capital and R25 have no named vault or points program that could be verified.
+ */
+const CURATED_FARM_PLANS: Record<string, CuratedPlan> = {
+  'sentora-curator': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of PYUSD into Sentora's PYUSD Main vault on Morpho and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the vault's rate and reward streams on Morpho each week, and top up only while the yield beats idle cash.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Sentora runs no points program, so there is nothing to claim; the return is the vault yield and its reward streams.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Sentora token claim only from Sentora's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'steakhouse-financial': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the Steakhouse Prime USDC vault on Morpho on Base and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the vault's net APY and allocation on Morpho each week; the yield compounds in USDC automatically.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Steakhouse pays yield from borrower interest, not token incentives, so there is no rewards page to claim from.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Steakhouse token claim only from Steakhouse's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  gauntlet: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the Gauntlet USDC Prime vault on Morpho on Base and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the vault's net APY and MORPHO reward rate on Morpho each week, and top up only while it beats idle cash.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Claim the vault's MORPHO rewards on Merkl, Gauntlet's rewards distributor, and never pay to claim them.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Gauntlet token claim only from Gauntlet's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  veda: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} into the ether.fi Liquid vault on Ethereum, a Veda BoringVault, and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold the shares to accrue Veda Points, and ether.fi points on the Liquid vault, and check the points dashboard weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Veda's points dashboard and claim only from the link it publishes; Veda has announced no token or conversion.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any VEDA token claim only from Veda's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  usdd: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Lock TRX in a USDD vault on Tron and mint $${capital} of USDD against it, keeping the collateral ratio above the minimum.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Stake the minted USDD for sUSDD to earn the variable savings rate, and check the rate on the USDD site weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `There is no USDD points program; the return is the sUSDD savings rate and JustLend supply yield, not a token claim.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any USDD claim only from the USDD site.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  upshift: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the Upshift USDC vault on Ethereum, curated by August, and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold the shares to earn Upshift points, 5x while total deposits stay under $750 million, and check the points page weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Upshift's points page and claim only from the link it publishes; Upshift has announced no token or airdrop.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Upshift token claim only from Upshift's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'bitfi-basis': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Mint $${capital} of bfUSD with USDT on BNB Chain, then stake it into the Horizon vault for hbfUSD.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the Horizon vault ratio and your BitFi Points balance on the BitFi dashboard each week.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open BitFi's points page and claim only from the link it publishes; BitFi Points are rewards, not a token.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any BitFi token claim only from BitFi's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'bittensor-dtao': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Add $${capital} of TAO and Alpha liquidity to a subnet pool on Backprop Finance to earn dTAO rewards.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Vote with your dTAO on which liquidity pools receive emissions, and rebalance toward the strongest subnets weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `There is no dTAO points program; the return is pool fees and dTAO emissions, claimed from Backprop itself.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any dTAO claim only from Bittensor's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  onre: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC on OnRe on Solana to mint ONyc, the reinsurance yield token, and hold it.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold ONyc to earn 1 OnRe Point per token per day; positions held 60 days or more earn Compounding Interest Rewards.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open OnRe's points page and claim only from the link it publishes; no token distribution has been confirmed.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any OnRe token claim only from OnRe's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'polymarket-international': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Fund $${capital} of USDC into Polymarket on Polygon, which becomes pUSD collateral, and take a position in an active market.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Post limit orders as a maker to earn the 15 to 25 percent maker rebate, paid daily in pUSD.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Polymarket runs no points program and has announced no token; treat every claim POLY page as a scam.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and trust only Polymarket's own site, X account and Discord.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  opentrade: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into OpenTrade's USDC Vault on Avalanche, backed by T-bills, and hold the vault tokens.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the vault's T-bill yield and your accrued interest on OpenTrade each week; interest compounds daily.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `OpenTrade runs no points program, so there is nothing to claim; the return is the T-bill yield itself.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any OpenTrade token claim only from OpenTrade's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'cian-yield-layer': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of stETH into CIAN's stETH Yield Layer on Ethereum and hold the receipt tokens.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold the position to earn CIAN Points on the deposit value, plus restaking points from the layer's strategies.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open CIAN's Voyage Points page and claim only from the link it publishes; points are not a promise of a token.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any CIAN token claim only from CIAN's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'plume-vaults': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the nTBILL Nest vault on Solana and hold the nTBILL vault tokens.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold the vault tokens to earn Plume Nest Points, up to 10x when deployed across Solana DeFi, and check points weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Nest's points page and claim only from the link it publishes; Season 1 pays from 1 percent of the PLUME supply.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Nest claim only from Plume's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  rockawayx: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of SOL into the onycSOL vault on Exponent, managed by RockawayX, and hold the onycSOL tokens.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold onycSOL to earn staking yield plus ONyc reinsurance yield, and 4x OnRe Points on the position.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `RockawayX runs no points program of its own; the OnRe Points accrue through the onycSOL position itself.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any RockawayX token claim only from RockawayX's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  'tori-finance': (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into Tori on Ethereum to mint trUSD, the synthetic dollar, and hold it.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Stake the trUSD for strUSD to earn Cores, Tori's points program, and check your Cores balance weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Tori's Cores page and claim only from the link it publishes; Cores are not a promise of any token or payment.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Tori token claim only from Tori's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  symbiotic: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of wstETH into a Symbiotic vault on Ethereum and delegate it to a network operator.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold the position to earn Symbiotic Points, 0.001 an hour per dollar in Core V2 vaults, and check the balance weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Symbiotic's app and claim only from the link it publishes; no token or airdrop has been announced.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and remember restaked collateral can be slashed, so size the position small.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  axis: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the Axis Origin Vault on Ethereum and receive ogUSDx, the vault's receipt token.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Hold ogUSDx to earn Coordinates at the 2x rate, and check your Coordinates balance on the Axis dashboard weekly.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Open Axis's points page and claim only from the link it publishes; Axis has confirmed no token yet.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log; the Origin Vault locks deposits for 30 days, so plan the exit.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+  hyperithm: (capital, hold) => [
+    FRESH_WALLET,
+    { text: `Deposit $${capital} of USDC into the Hyperithm USDC Apex vault on Morpho on Ethereum and hold the vault shares.`, cost: `$${capital} of capital and about $${capital >= 150 ? 8 : 4} of gas`, time: '15 minutes to set up' },
+    { text: `Check the Apex vault's allocation and net APY on Morpho each week; the yield comes from delta-neutral trading.`, cost: 'about $2 of gas a week', time: '10 minutes a week' },
+    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
+    { text: `Hyperithm runs no points program, so there is nothing to claim; the return is the vault yield itself.`, cost: 'no fee to check', time: '10 minutes' },
+    { text: `Write the wallet, the dates and every transaction in a farm log, and verify any Hyperithm token claim only from Hyperithm's official channels.`, cost: 'nothing but the log', time: '5 minutes' },
+  ],
+};
+
+/**
+ * A protocol's farm plan: six steps, each an action with a cost and a time. A slug with a
+ * curated plan gets that plan; every other protocol gets the template, derived from its own
+ * record (category, chains, TVL, age).
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
-  const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
+  const curated = CURATED_FARM_PLANS[p.slug];
+  if (curated !== undefined) return curated(capital, hold);
+  const chain = chainOf(p);
   const action = actionFor(p, capital, chain);
   const weekly = weeklyFor(p);
   return [
