@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols, ranked by implied launch value</title>
+<link rel="stylesheet" href="app.css">
+<script src="../data.js"></script>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Token Radar</h1>
+    <p class="sub">Pre-token protocols, ranked by what their token would be worth if it launched today.</p>
+  </div>
+  <dl class="stats" id="stats"></dl>
+</header>
+
+<main>
+  <section class="method" id="method">
+    <h2>How the radar prices a launch</h2>
+    <p>Implied value = TVL &times; peer multiple &times; momentum &times; maturity &times; chain breadth.
+    The peer multiple is the median market-cap-to-TVL of the token-bearing protocols in the same
+    category, computed from this snapshot — never typed in. Momentum is the 7-day TVL change, clamped
+    and log-scaled so one wild week cannot explode a row. Maturity rewards time spent running with no
+    token, saturating at three years. Chain breadth adds up to 10% for multi-chain protocols.</p>
+    <p class="note">Implied value is this entry's own claim from the snapshot's figures. It is not a
+    prediction that a token will be issued, or when, or at what price. A protocol is called pre-token
+    only because its record carries no token — its record may still miss one.</p>
+    <div id="peers"></div>
+  </section>
+
+  <section class="controls">
+    <label>Search <input id="q" type="search" placeholder="protocol name or slug" autocomplete="off"></label>
+    <label>Category <select id="cat"><option value="">All categories</option></select></label>
+    <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+    <label>Min TVL <select id="minTvl">
+      <option value="0">Any</option>
+      <option value="50000000">$50M+</option>
+      <option value="100000000">$100M+</option>
+      <option value="500000000">$500M+</option>
+      <option value="1000000000">$1B+</option>
+    </select></label>
+    <label class="check"><input id="watchOnly" type="checkbox"> Watchlist only</label>
+    <label>Sort <select id="sort">
+      <option value="rank">Rank</option>
+      <option value="implied_value_usd">Implied value</option>
+      <option value="tvl_usd">TVL</option>
+      <option value="change_7d">7-day change</option>
+      <option value="age_days">Age</option>
+    </select></label>
+  </section>
+
+  <p class="count" id="count"></p>
+
+  <section class="board">
+    <table id="board">
+      <thead><tr>
+        <th data-sort="rank">#</th>
+        <th data-sort="name">Protocol</th>
+        <th data-sort="category">Category</th>
+        <th data-sort="tvl_usd">TVL</th>
+        <th data-sort="change_7d">7d</th>
+        <th data-sort="age_days">Age</th>
+        <th data-sort="chains">Chains</th>
+        <th data-sort="implied_value_usd">Implied value</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="detail" id="detail" hidden></section>
+
+  <section class="live">
+    <h2>Already trading — the market's own values</h2>
+    <p class="note">These protocols already have a token, so the board does not rank them. They are
+    shown here with their real market caps: the peer group the multiples above are priced from.</p>
+    <table id="liveTable">
+      <thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>7d</th></tr></thead>
+      <tbody id="liveRows"></tbody>
+    </table>
+  </section>
+
+  <section class="excluded">
+    <h2>Left out of the board, and why</h2>
+    <p class="note">A wrapped, staked or bridged product of a token that already trades is not a
+    protocol still waiting on a launch of its own. The board applies the watchlist's exclusion rule
+    to every row — these are the pre-token protocols it left out.</p>
+    <div id="excluded"></div>
+  </section>
+</main>
+
+<footer>
+  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-2 &middot;
+  floor $50M &middot; board <span id="boardSize"></span> rows</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
