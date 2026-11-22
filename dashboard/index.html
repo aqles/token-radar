@@ -17,6 +17,11 @@
 </header>
 
 <main>
+  <section class="evidence-top">
+    <div class="evidence" id="heldoutTop"></div>
+    <div class="proof" id="proof"></div>
+  </section>
+
   <section class="top5" id="top5">
     <h2>Top launch candidates</h2>
     <p class="note">The five highest <b>expected</b> values among protocols whose token does not already exist:
@@ -41,7 +46,7 @@
     to [0.5&times;, 2&times;] of the peer multiple before it is applied. The clamp is there because the
     unbounded curve crushes giants: it prices Sentora at 0.0327&times; TVL, down from its peer multiple
     of 0.2138&times;. The bound keeps the top rows credible. It is a prior, not a fit — the unbounded
-    curve is the better held-out predictor, and the evidence strip below says so.</p>
+    curve is the better held-out predictor, and the evidence strip above says so.</p>
     <p>Token odds are a fitted logistic model, not a category rate: logit(p) = logit(shrunk category
     rate) &minus; 0.0182 &minus; 0.154&middot;z(log TVL) &minus; 0.485&middot;z(7-day growth) + 0.312&middot;z(log chains),
     fit by gradient descent (500 iterations) on all 758 protocols at run time. The offset is the shrunk
@@ -60,19 +65,30 @@
     current market cap, not a launch — and because the judging criteria name 7-day growth and time
     without a token as inputs to implied value. Within-category size slopes were tested and rejected:
     they fail their own shuffle control.</p>
+    <p>Rank ranges come from 200 bootstrap refits of the fitted model: the 128 traded comparables
+    are resampled with replacement (seed 20261122), the size curve and the peer medians are refit,
+    and every row is re-priced and re-ranked. Each row shows the P10&ndash;P90 range and the median
+    of its rank across the refits. The range is a stability statement, not a calibrated interval:
+    leave-one-out on traded comparables, the true rank falls inside the P10&ndash;P90 range only
+    25.0% of the time (26.4% on the rankable-like subset), because the residual noise (median error
+    ~4&times;) dwarfs the parameter uncertainty the bootstrap measures. One row's point rank sits
+    outside its own range — Arrakis Modular, rank 54, range 55&ndash;150 — which is legitimate: a
+    point estimate can sit in the tail of its bootstrap distribution. No per-row value band is
+    shown either: every candidate band holding ~80% of held-out values was 114&ndash;230&times; wide,
+    and the tightest honest band held only ~50%.</p>
     <p class="note">What this board does not claim: no genuine walk-forward test exists for a snapshot
     dated 2026-11-14 — the time split below fits on protocols listed before 2025-01-01 and tests on
     those listed after, within the same snapshot. No FDV field exists in the snapshot, so no FDV
     multiple could be fitted. And no per-row uncertainty band is shown: the leave-one-out residuals
     put a P10&ndash;P90 band at roughly [0.12&times;, 21&times;] around every implied value — too wide to be
-    useful. The held-out medians below are the honest uncertainty statement.</p>
-    <div class="evidence" id="heldout"></div>
+    useful. The held-out medians above are the honest uncertainty statement.</p>
     <table class="evtable">
       <thead><tr><th>Held-out test</th><th>Peer alone (v3)</th><th>Size curve, unbounded</th><th>Adopted: curve bounded to [0.5&times;, 2&times;] peer</th></tr></thead>
       <tbody>
         <tr><td>Leave-one-out, rankable-like comps (n=87) — median error</td><td>4.99&times; (MdALE 1.608)</td><td>3.23&times; (MdALE 1.173), wins 65.5%</td><td><b>3.96&times; (MdALE 1.377), wins 67.8%</b></td></tr>
         <tr><td>Split folds, rankable-like — MdALE (even / odd / time)</td><td>1.714 / 1.614 / 1.622</td><td>1.183 / 1.120 / 1.129</td><td><b>1.323 / 1.036 / 1.093</b></td></tr>
         <tr><td>Token odds, 4-fold — Brier / AUC</td><td>0.1546 / 0.600 (shrunk category rate)</td><td colspan="2"><b>0.1502 / 0.650</b> (fitted logistic; on the forward time split every odds model loses to the flat 19% rate — the odds discriminate but are not calibrated across time)</td></tr>
+        <tr><td>Rank range, 200 bootstrap refits — P10&ndash;P90 coverage of the true rank (leave-one-out, traded comps)</td><td colspan="3">25.0% all comps (n=128) / 26.4% rankable-like (n=87). A stability statement — where a row ranks when the fitted curve and peers wobble — not a calibrated interval: residual noise (~4&times; median error) dwarfs parameter uncertainty. Median width 34 ranks over the board; the top 3 rows are pinned (width 0).</td></tr>
       </tbody>
     </table>
     <p class="note">Implied value is this entry's own claim from the snapshot's figures. It is not a
@@ -114,6 +130,7 @@
     <table id="board">
       <thead><tr>
         <th data-sort="rank">#</th>
+        <th data-sort="rank_lo">Rank range</th>
         <th data-sort="name">Protocol</th>
         <th data-sort="category">Category</th>
         <th data-sort="tvl_usd">TVL</th>
@@ -149,7 +166,7 @@
 </main>
 
 <footer>
-  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-4 &middot;
+  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-4.1 &middot;
   floor $50M &middot; board <span id="boardSize"></span> rows</p>
   <p id="integrity"></p>
 </footer>

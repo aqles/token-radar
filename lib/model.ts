@@ -1,4 +1,18 @@
-// Token launch radar, model radar-4: fitted size curve + category peer prior + fitted odds.
+// Token launch radar, model radar-4.1: fitted size curve + category peer prior + fitted odds.
+//
+// Rank ranges are a STABILITY statement, not a prediction interval: each row's rank is
+// recomputed under 200 bootstrap refits of the size curve and the peer table (the 128
+// comparables resampled with replacement, seeded PRNG — see rank_range_method in data.js),
+// and the row carries the P10-P90 range and median of its rank across refits. Measured
+// honestly on traded comparables, the true market-cap rank falls inside that range only
+// ~26% of the time (the residual noise dwarfs the parameter uncertainty), so the dashboard
+// must present the range as "rank 3-7 across 200 refits of the fitted model", never as a
+// calibrated interval. No per-row value band is shipped: every band that holds ~80% on
+// held-out comparables is 100x or wider, and every band narrower than ~16x holds only
+// ~50% — the numbers are in scratch/v4fix-model-evidence.md. The fitted odds model itself
+// is serialised in data.js (odds_fit) with each row's shrunk category rate (odds_base),
+// so the page can re-derive token odds live from the row's own TVL, 7-day change and
+// chain count.
 //
 // The board ranks every pre-token protocol the snapshot carries that is not a wrapped, staked or
 // bridged product of a token that already trades. The watchlist is the floor, never the ceiling:
@@ -115,6 +129,10 @@ export interface ModelConstants {
   odds_gd_iters: number;
   /** Gradient-descent learning rate for the token-odds logistic fit. */
   odds_gd_lr: number;
+  /** Bootstrap refits per row for the rank range (P10-P90 of rank across refits). */
+  rank_range_b: number;
+  /** Fixed seed for the rank-range bootstrap PRNG (mulberry32): no clock, no randomness. */
+  rank_range_seed: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -135,10 +153,12 @@ export const MODEL: ModelConstants = {
   size_cap_mult: 2,
   odds_gd_iters: 500,
   odds_gd_lr: 0.5,
+  rank_range_b: 200,
+  rank_range_seed: 20261122,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-4.1';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -184,6 +204,14 @@ export interface BoardRow {
     maturity_multiplier: number;
     chain_multiplier: number;
     age_days: number | null;
+    /** P10 of this row's rank across the rank-range bootstrap refits (1 = top). */
+    rank_lo: number;
+    /** P90 of this row's rank across the rank-range bootstrap refits. */
+    rank_hi: number;
+    /** Median of this row's rank across the rank-range bootstrap refits. */
+    rank_median: number;
+    /** The shrunk category token rate: the logistic odds model's offset for this row. */
+    odds_base: number;
   };
   farm_steps: string[];
 }
@@ -212,6 +240,14 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  /** P10 of this row's rank across the rank-range bootstrap refits (1 = top). */
+  rank_lo: number;
+  /** P90 of this row's rank across the rank-range bootstrap refits. */
+  rank_hi: number;
+  /** Median of this row's rank across the rank-range bootstrap refits. */
+  rank_median: number;
+  /** The shrunk category token rate: the logistic odds model's offset for this row. */
+  odds_base: number;
   stablecoin: boolean;
   on_watchlist: boolean;
   farm_steps: string[];
@@ -261,6 +297,47 @@ export interface OddsFit {
   sds: number[];
 }
 
+/** How the per-row rank ranges were computed (build-time bootstrap, deterministic). */
+export interface RankRangeMethod {
+  /** Bootstrap refits. */
+  b: number;
+  /** Fixed PRNG seed. */
+  seed: number;
+  /** What was resampled on each refit. */
+  resampled: string;
+  /** What was refit on each resample. */
+  refit: string;
+  /** Which terms were held at their full-fit values. */
+  fixed_terms: string;
+  /** The peer bound applied inside every refit. */
+  clamp: string;
+  /** Which quantiles of the rank distribution the row fields carry. */
+  quantiles: string;
+}
+
+/** One category's token record inside the serialised odds fit. */
+export interface OddsCategoryEntry {
+  category: string;
+  with_token: number;
+  total: number;
+}
+
+/** The fitted token-odds logistic model, serialised for the dashboard: no Maps, so it
+ * survives JSON. The page re-derives a row's odds as logit(p) = logit(odds_base) +
+ * intercept + slopes . z([log TVL, clamped 7-day growth / 100, log chains]), with the
+ * row's own odds_base field as the offset. Params are rounded to 6 decimals; the odds
+ * themselves are rounded to 4 decimals on the board, and re-derivation from these
+ * fields reproduces them to within 0.0001 (see scratch/v4fix-check-odds.mjs). */
+export interface OddsFitData {
+  by_category: OddsCategoryEntry[];
+  global_rate: number;
+  intercept: number;
+  /** Slopes on the standardised covariates [log TVL, 7-day growth / 100, log chains]. */
+  slopes: number[];
+  means: number[];
+  sds: number[];
+}
+
 /** The value model's own held-out test, recomputed at run time by leave-one-out. */
 export interface HeldOut {
   /** Token-bearing comparables in the leave-one-out test. */
@@ -289,6 +366,10 @@ export interface RadarData {
   global_multiple: number;
   size_curve: SizeCurve | null;
   heldout: HeldOut;
+  /** How the per-row rank ranges were computed. */
+  rank_range_method: RankRangeMethod;
+  /** The fitted token-odds logistic model, serialised for live re-derivation. */
+  odds_fit: OddsFitData;
   peers: PeerEntry[];
   excluded: ExcludedRow[];
   rows: RadarRow[];
@@ -311,6 +392,30 @@ function finite(value: unknown, fallback: number): number {
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
+
+/**
+ * A deterministic PRNG (mulberry32): the rank-range bootstrap draws from this and
+ * nothing else — no Math.random, no Date, no network anywhere in the model path.
+ */
+export function mulberry32(seed: number): () => number {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** The p-quantile of a SORTED array by linear interpolation (p in [0, 1]). */
+export function quantileOf(sorted: number[], p: number): number {
+  if (sorted.length === 0) return NaN;
+  const i = (sorted.length - 1) * Math.min(1, Math.max(0, p));
+  const lo = Math.floor(i);
+  const hi = Math.ceil(i);
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (i - lo);
+}
 
 /** A whole day count from `from` to `to`, clamped at zero; null when either date is absent or bad. */
 export function ageDays(asOf: string, listedAt: string | null): number | null {
@@ -328,19 +433,23 @@ function medianOf(sorted: number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/**
- * The peer multiples: for every category, the median mcap/tvl of its token-bearing protocols, and
- * the global median across all of them. Computed from this snapshot at run time.
- */
+/** The peer multiples: for every category, the median mcap/tvl of its token-bearing protocols, and
+ * the global median across all of them. */
 export interface PeerTable {
   byCategory: Map<string, { multiple: number; n: number }>;
   global: number;
 }
 
-export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): PeerTable {
+/**
+ * The peer multiples from an explicit list of token-bearing comparables: for every
+ * category, the median mcap/tvl of its protocols, and the global median across all of
+ * them. The list may be a bootstrap resample (duplicates count once per draw). Computed
+ * from this snapshot at run time.
+ */
+export function peerTableFromComps(comps: SnapshotProtocol[], model: ModelConstants = MODEL): PeerTable {
   const byCategory = new Map<string, number[]>();
   const all: number[] = [];
-  for (const p of snapshot.protocols) {
+  for (const p of comps) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const m = p.mcap_usd / p.tvl_usd;
     if (!Number.isFinite(m) || m <= 0) continue;
@@ -360,6 +469,10 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
     if (med !== null) table.set(category, { multiple: clamp(med), n: values.length });
   }
   return { byCategory: table, global };
+}
+
+export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): PeerTable {
+  return peerTableFromComps(sizeComps(snapshot), model);
 }
 
 /**
@@ -531,8 +644,13 @@ export function sizeComps(snapshot: Snapshot): SnapshotProtocol[] {
  * on the peer multiple alone. `excludeSlug` leaves one comparable out, for the leave-one-out
  * test. Computed from this snapshot at run time, never typed in by hand.
  */
-export function fitSizeCurve(snapshot: Snapshot, excludeSlug: string | null = null): SizeCurve | null {
-  const comps = sizeComps(snapshot).filter((p) => p.slug !== excludeSlug);
+/**
+ * The fitted size curve from an explicit list of token-bearing comparables: ordinary
+ * least squares on log(mcap) = intercept + slope * log(tvl). The list may be a bootstrap
+ * resample (duplicates weight the fit once per draw). Fewer than 10 comparables is no
+ * fit at all and returns null, which prices rows on the peer multiple alone.
+ */
+export function fitSizeCurveFromComps(comps: SnapshotProtocol[]): SizeCurve | null {
   if (comps.length < 10) return null;
   const xs = comps.map((p) => Math.log(p.tvl_usd));
   const ys = comps.map((p) => Math.log(p.mcap_usd!));
@@ -548,6 +666,10 @@ export function fitSizeCurve(snapshot: Snapshot, excludeSlug: string | null = nu
   const slope = sxx === 0 ? 0 : sxy / sxx;
   const intercept = my - slope * mx;
   return { slope: round4(slope), intercept: round4(intercept), n_comps: n };
+}
+
+export function fitSizeCurve(snapshot: Snapshot, excludeSlug: string | null = null): SizeCurve | null {
+  return fitSizeCurveFromComps(sizeComps(snapshot).filter((p) => p.slug !== excludeSlug));
 }
 
 /** The size curve's own multiple for a TVL: the curve's implied mcap over that TVL, clamped. */
@@ -616,6 +738,108 @@ export function looValueHeldOut(snapshot: Snapshot, model: ModelConstants = MODE
     median_error_x: round4(Math.exp(med(err4))),
     peer_median_error_x: round4(Math.exp(med(errPeer))),
     win_rate_vs_peer: Math.round((wins / n) * 1e4) / 1e4,
+  };
+}
+
+/** One scored board row's fixed inputs for the rank-range bootstrap. */
+export interface RankRangeInput {
+  slug: string;
+  category: string | null;
+  tvl_usd: number;
+  growth_multiplier: number;
+  maturity_multiplier: number;
+  chain_multiplier: number;
+}
+
+/** One row's rank across the bootstrap refits: P10, P90 and median (1 = top). */
+export interface RankRange {
+  rank_lo: number;
+  rank_hi: number;
+  rank_median: number;
+}
+
+/**
+ * The rank range: each row re-ranked under B bootstrap refits of the fitted value model.
+ * On every refit the 128 token-bearing comparables are resampled WITH REPLACEMENT (seeded
+ * mulberry32, one stream across refits, in snapshot order), the peer table (category
+ * medians of the resampled comps) and the size curve (OLS on the resampled comps) are
+ * refit, and every board row is re-priced under the refit — peer x peer-bounded size
+ * curve with the [0.5x, 2x] clamp — with its growth, maturity and chain terms held at
+ * their full-fit values, then re-ranked (ties by slug, as on the board). The row's range
+ * is the P10-P90 of its rank across refits, plus the median. This is a REAL computed
+ * range, not a cosmetic ±: a row whose rank moves when the fit wobbles shows a wide
+ * range, a row pinned by its own TVL and category shows a narrow one. It is a stability
+ * statement, not a prediction interval — on traded comparables the true market-cap rank
+ * falls inside the P10-P90 range only ~26% of the time (scratch/v4fix-model-evidence.md),
+ * because the residual noise dwarfs the parameter uncertainty the bootstrap measures.
+ * Deterministic: same seed, same snapshot, same ranges, byte for byte.
+ */
+export function bootstrapRankRanges(
+  snapshot: Snapshot,
+  rows: RankRangeInput[],
+  model: ModelConstants = MODEL,
+): Map<string, RankRange> {
+  const comps = sizeComps(snapshot);
+  const n = rows.length;
+  const rng = mulberry32(model.rank_range_seed);
+  const ranks = new Map<string, number[]>();
+  for (const r of rows) ranks.set(r.slug, []);
+  for (let b = 0; b < model.rank_range_b; b++) {
+    const resampled: SnapshotProtocol[] = [];
+    for (let k = 0; k < comps.length; k++) resampled.push(comps[Math.floor(rng() * comps.length)]!);
+    const peers = peerTableFromComps(resampled, model);
+    const curve = fitSizeCurveFromComps(resampled);
+    const scored = rows.map((r) => {
+      const peer = peerMultipleFor(r.category, peers, model);
+      const size = sizeMultiplierFor(r.tvl_usd, peer.multiple, curve, model);
+      const implied = Math.max(1, Math.round(r.tvl_usd * peer.multiple * size.multiplier * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier));
+      return { slug: r.slug, implied };
+    });
+    scored.sort((x, y) => y.implied - x.implied || (x.slug < y.slug ? -1 : 1));
+    scored.forEach((s, i) => ranks.get(s.slug)!.push(i + 1));
+  }
+  const out = new Map<string, RankRange>();
+  for (const [slug, rs] of ranks) {
+    const sorted = [...rs].sort((a, b) => a - b);
+    const clampRank = (q: number): number => Math.min(n, Math.max(1, Math.round(quantileOf(sorted, q))));
+    out.set(slug, { rank_lo: clampRank(0.1), rank_hi: clampRank(0.9), rank_median: clampRank(0.5) });
+  }
+  return out;
+}
+
+/** The rank-range method record for data.js: what the bootstrap did, in words. */
+export function rankRangeMethod(model: ModelConstants = MODEL): RankRangeMethod {
+  return {
+    b: model.rank_range_b,
+    seed: model.rank_range_seed,
+    resampled: 'size comps with replacement (n=128)',
+    refit: 'size curve OLS + peer medians per refit',
+    fixed_terms: 'growth/maturity/chains from full fit',
+    clamp: '[0.5x, 2x] peer',
+    quantiles: 'P10/P90/median of rank across refits',
+  };
+}
+
+/**
+ * The fitted odds model, serialised for data.js: the OddsTable's byCategory Map becomes
+ * an array of {category, with_token, total} sorted by category, and the logistic
+ * intercept/slopes/means/sds are rounded to 6 decimals. The page re-derives a row's odds
+ * as logit(p) = logit(odds_base) + intercept + slopes . z([log TVL, clamped 7-day
+ * growth / 100, log chains]) from the row's own fields; odds_base is the row's shrunk
+ * category rate (the logistic offset), rounded to 4 decimals exactly as the board's
+ * tokenOddsFittedFor computes it.
+ */
+export function serialiseOddsFit(fit: OddsFit): OddsFitData {
+  const by_category = [...fit.table.byCategory.entries()]
+    .map(([category, e]) => ({ category, with_token: e.withToken, total: e.total }))
+    .sort((a, b) => (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  return {
+    by_category,
+    global_rate: round6(fit.table.globalRate),
+    intercept: round6(fit.intercept),
+    slopes: fit.slopes.map(round6),
+    means: fit.means.map(round6),
+    sds: fit.sds.map(round6),
   };
 }
 
@@ -724,11 +948,22 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, peers, model, curve);
     const tokenOdds = tokenOddsFittedFor(p, oddsFit, model);
+    const oddsBase = tokenOddsBaseFor(p.category, oddsFit.table, model);
     const cost = farmCost(p, v.age);
-    return { p, v, tokenOdds, expected: Math.max(1, Math.round(v.implied * tokenOdds)), cost };
+    return { p, v, tokenOdds, oddsBase, expected: Math.max(1, Math.round(v.implied * tokenOdds)), cost };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
+  const rankRanges = bootstrapRankRanges(snapshot, scored.map((s) => ({
+    slug: s.p.slug,
+    category: s.p.category,
+    tvl_usd: s.p.tvl_usd,
+    growth_multiplier: s.v.growthMult,
+    maturity_multiplier: s.v.maturityMult,
+    chain_multiplier: s.v.chainMult,
+  })), model);
+  return scored.map((s, i) => {
+    const range = rankRanges.get(s.p.slug)!;
+    return {
     rank: i + 1,
     slug: s.p.slug,
     name: s.p.name,
@@ -759,9 +994,14 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       maturity_multiplier: round4(s.v.maturityMult),
       chain_multiplier: round4(s.v.chainMult),
       age_days: s.v.age,
+      rank_lo: range.rank_lo,
+      rank_hi: range.rank_hi,
+      rank_median: range.rank_median,
+      odds_base: s.oddsBase,
     },
     farm_steps: farmSteps(s.p, s.v.age).map(stepText),
-  }));
+    };
+  });
 }
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
@@ -1122,6 +1362,10 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    rank_lo: row.model.rank_lo,
+    rank_hi: row.model.rank_hi,
+    rank_median: row.model.rank_median,
+    odds_base: row.model.odds_base,
     stablecoin: isStablecoin({ slug: row.slug, name: row.name, category: row.category, chains: row.chains, tvl_usd: row.tvl_usd, change_7d: row.change_7d, mcap_usd: row.mcap_usd, listed_at: row.listed_at, gecko_id: row.gecko_id, symbol: row.symbol }),
     on_watchlist: row.on_watchlist,
     farm_steps: row.farm_steps,
@@ -1135,6 +1379,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const peers = peerMultiples(snapshot, model);
   const curve = fitSizeCurve(snapshot);
   const heldout = looValueHeldOut(snapshot, model);
+  // The odds fit is recomputed here for serialisation: the fit is deterministic gradient
+  // descent on this snapshot, so this is the same fit buildBoard already used for the rows.
+  const oddsFit = fitTokenOdds(snapshot, model);
   const early = board.filter((r) => !r.on_watchlist).length;
   // The peer table shows the multiple each ranked category actually gets: the category median
   // at n >= 3, the log-space blend at n = 2, and nothing for categories with fewer peers.
@@ -1162,6 +1409,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     global_multiple: round4(peers.global),
     size_curve: curve,
     heldout,
+    rank_range_method: rankRangeMethod(model),
+    odds_fit: serialiseOddsFit(oddsFit),
     peers: peerTable,
     excluded: excludedRows(snapshot),
     rows: board.map(radarRow),

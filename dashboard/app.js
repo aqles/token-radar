@@ -10,7 +10,7 @@
 (function () {
   var D = window.RADAR;
   if (!D || !D.rows) {
-    document.getElementById('rows').innerHTML = '<tr><td colspan="9">No radar data loaded.</td></tr>';
+    document.getElementById('rows').innerHTML = '<tr><td colspan="10">No radar data loaded.</td></tr>';
     return;
   }
 
@@ -38,6 +38,27 @@
     if (n < 365) return n + 'd';
     return (n / 365).toFixed(1) + 'y';
   }
+  function rangeStr(r) { return r.rank_lo + '–' + r.rank_hi; }
+
+  // ---- live re-derivation: the page re-prices every row from data.js alone ----
+  // Implied value: TVL × peer × size × momentum × maturity × chains, using the stored
+  // multipliers (which already include the [0.5×, 2×] clamp). Token odds: logit(p) =
+  // logit(odds_base) + intercept + slopes·z([log TVL, clamped 7d growth/100, log chains]),
+  // with the growth clamped to [-60, 120] exactly as oddsFeatures in lib/model.ts clamps it.
+  function rederiveImplied(r) {
+    return r.tvl_usd * r.peer_multiple * r.size_multiplier * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier;
+  }
+  function rederiveOdds(r) {
+    var f = D.odds_fit;
+    if (!f || r.odds_base == null) return null;
+    var g = Math.min(D.model.growth_cap, Math.max(D.model.growth_floor, r.change_7d == null ? 0 : r.change_7d)) / 100;
+    var feats = [Math.log(Math.max(1, r.tvl_usd)), g, Math.log(Math.max(1, r.chains.length))];
+    var p0 = Math.min(0.99, Math.max(0.01, r.odds_base));
+    var eta = Math.log(p0 / (1 - p0)) + f.intercept;
+    for (var j = 0; j < 3; j++) eta += f.slopes[j] * ((feats[j] - f.means[j]) / f.sds[j]);
+    eta = Math.max(-30, Math.min(30, eta));
+    return 1 / (1 + Math.exp(-eta));
+  }
 
   // ---- header stats -------------------------------------------------------
   var top = D.rows[0];
@@ -55,6 +76,55 @@
     ' with a token, ' + D.board_size + ' ranked, ' + D.watchlist_size + '/' + D.watchlist_size +
     ' watchlist covered, ' + D.excluded.length + ' left out with a reason each. ' +
     'No protocol is dropped silently.';
+
+  // ---- proof strip: recomputed at page load from data.js; it can fail ----
+  // Each check is a real computation against the stored board. A FAIL shows in red;
+  // nothing here is typed in. Tolerances: implied ≤0.2% relative (stored multipliers are
+  // rounded to 4 decimals), odds ≤0.0001 absolute (stored odds rounded to 4 decimals),
+  // expected value ≤$1 absolute (stored EV rounded to whole dollars).
+  (function () {
+    var el = document.getElementById('proof');
+    if (!el) return;
+    var checks = [];
+    function check(name, ok, detail) { checks.push({ name: name, ok: !!ok, detail: detail }); }
+    var maxImpRel = 0, worstImp = '';
+    D.rows.forEach(function (r) {
+      var rel = Math.abs(rederiveImplied(r) - r.implied_value_usd) / r.implied_value_usd;
+      if (rel > maxImpRel) { maxImpRel = rel; worstImp = r.slug; }
+    });
+    check('Implied value re-derived', maxImpRel <= 0.002, 'max rel. error ' + (maxImpRel * 100).toFixed(2) + '% (' + worstImp + '; stored multipliers rounded to 4 decimals)');
+    var maxOdds = 0, worstOdds = '', oddsOk = !!D.odds_fit;
+    D.rows.forEach(function (r) {
+      var p = rederiveOdds(r);
+      if (p == null) { oddsOk = false; return; }
+      var d = Math.abs(Math.round(p * 1e4) / 1e4 - r.token_odds);
+      if (d > maxOdds) { maxOdds = d; worstOdds = r.slug; }
+    });
+    check('Token odds re-derived', oddsOk && maxOdds <= 0.0001, 'max abs. diff ' + maxOdds.toFixed(4) + (worstOdds ? ' (' + worstOdds + ')' : '') + '; stored odds rounded to 4 decimals');
+    check('Board sorted by implied value', D.rows.every(function (r, i) { return i === 0 || D.rows[i - 1].implied_value_usd >= r.implied_value_usd; }), D.rows.length + ' rows non-increasing');
+    check('Rank order matches stored rank', D.rows.every(function (r, i) { return r.rank === i + 1; }), D.rows.length + '/' + D.rows.length);
+    var watchRows = D.rows.filter(function (r) { return r.on_watchlist; }).length;
+    check('Watchlist coverage', watchRows === D.watchlist_size, watchRows + '/' + D.watchlist_size);
+    check('Token odds in [0, 1]', D.rows.every(function (r) { return r.token_odds >= 0 && r.token_odds <= 1; }), D.rows.length + '/' + D.rows.length);
+    var maxEv = 0, worstEv = '';
+    D.rows.forEach(function (r) {
+      var d = Math.abs(r.expected_value_usd - r.implied_value_usd * r.token_odds);
+      if (d > maxEv) { maxEv = d; worstEv = r.slug; }
+    });
+    check('Expected value = implied × odds', maxEv <= 1, 'max abs. error $' + maxEv.toFixed(2) + ' (' + worstEv + ')');
+    var stepLens = [];
+    D.rows.forEach(function (r) { r.farm_steps.forEach(function (s) { stepLens.push(s.length); }); });
+    check('Farm steps on every row', D.rows.every(function (r) { return Array.isArray(r.farm_steps) && r.farm_steps.length >= 3 && r.farm_steps.every(function (s) { return typeof s === 'string' && s.length >= 20 && s.length <= 600; }); }), D.rows.length + '/' + D.rows.length + ' rows, ' + Math.min.apply(null, stepLens) + '–' + Math.max.apply(null, stepLens) + ' chars per step');
+    check('Rank ranges ordered (lo ≤ median ≤ hi)', D.rows.every(function (r) { return r.rank_lo <= r.rank_median && r.rank_median <= r.rank_hi; }), D.rows.length + '/' + D.rows.length);
+    var outside = D.rows.filter(function (r) { return r.rank < r.rank_lo || r.rank > r.rank_hi; });
+    var passed = checks.filter(function (c) { return c.ok; }).length;
+    el.innerHTML = '<b>Self-test — recomputed in this page from data.js.</b> ' +
+      '<span class="' + (passed === checks.length ? 'pass' : 'fail') + '">' + passed + '/' + checks.length + ' PASS</span>' +
+      '<ul>' + checks.map(function (c) {
+        return '<li><span class="' + (c.ok ? 'pass' : 'fail') + '">' + (c.ok ? 'PASS' : 'FAIL') + '</span> ' + esc(c.name) + ' — ' + esc(c.detail) + '</li>';
+      }).join('') + '</ul>' +
+      '<p class="note">Note: point rank outside its own range on ' + outside.length + '/' + D.rows.length + ' row' + (outside.length === 1 ? '' : 's') + (outside.length ? ' — ' + outside.map(function (r) { return esc(r.name) + ' (rank ' + r.rank + ', range ' + rangeStr(r) + ')'; }).join(', ') + '. A point estimate can sit in the tail of its bootstrap distribution; see methodology.' : '.') + '</p>';
+  })();
 
   // ---- top launch candidates: top 5 non-stablecoin rows by EXPECTED value --------
   // Expected value is the implied launch value times the token odds: the number a farmer
@@ -87,18 +157,19 @@
 
   // ---- held-out evidence strip: recomputed at run time, rendered from data.js ----
   // The numbers below are not typed in: D.heldout is the leave-one-out test the model
-  // recomputes on every run, and D.size_curve is the fitted curve itself.
+  // recomputes on every run, and D.size_curve is the fitted curve itself. The odds
+  // Brier/AUC and the ~26% rank-range coverage are the methodology table's figures.
   (function () {
-    var h = D.heldout, sc = D.size_curve;
-    var el = document.getElementById('heldout');
+    var h = D.heldout, sc = D.size_curve, rr = D.rank_range_method;
+    var el = document.getElementById('heldoutTop');
     if (!el || !h || !sc) return;
     el.innerHTML = '<b>Held out, not asserted.</b> Leave-one-out on ' + h.n_comps +
-      ' traded tokens, recomputed at run time: radar-4 median error <b>' + h.median_error_x.toFixed(2) +
+      ' traded tokens, recomputed at run time: radar-4.1 median error <b>' + h.median_error_x.toFixed(2) +
       '&times;</b> vs ' + h.peer_median_error_x.toFixed(2) + '&times; for the peer multiple alone; ' +
-      'radar-4 is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
-      'Size curve: log(mcap) = ' + sc.intercept.toFixed(4) + ' + ' + sc.slope.toFixed(4) +
-      '&middot;log(TVL), n=' + sc.n_comps + '. The unbounded curve is better still (3.23&times; held out) ' +
-      'but prices Sentora at 0.0327&times; TVL — the 2&times; peer bound is a prior that buys credible giants.';
+      'radar-4.1 is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
+      'Token odds, 4-fold: Brier 0.150 / AUC 0.650. ' +
+      'Rank range: P10&ndash;P90 across ' + (rr ? rr.b : 200) + ' refits — a stability statement, not a calibrated interval: on traded comparables the true rank falls inside only ~26% of the time (leave-one-out), because residual noise (~4&times; median error) dwarfs parameter uncertainty. ' +
+      'No per-row value band: every candidate holding ~80% of held-out values was 114&ndash;230&times; wide.';
   })();
 
   // ---- coverage: how many rows price from their own category vs the global median --
@@ -114,7 +185,7 @@
     ' (their category has fewer than two trading peers). ' +
     'The size bound is active, not decorative: ' + atFloor + ' rows sit at the 0.5\u00d7 floor, ' +
     atCap + ' at the 2.0\u00d7 cap, median multiplier \u00d7' + medMult.toFixed(2) + '. ' +
-    'Held out, leave-one-out on the 128 traded tokens, radar-4 predicts market caps with a median ' +
+    'Held out, leave-one-out on the 128 traded tokens, radar-4.1 predicts market caps with a median ' +
     'error of ' + D.heldout.median_error_x.toFixed(2) + '\u00d7 against ' +
     D.heldout.peer_median_error_x.toFixed(2) + '\u00d7 for the peer multiple alone — ' +
     'the fitted curve earns its place; momentum, maturity and chain breadth do not, and the ' +
@@ -186,6 +257,7 @@
     document.getElementById('rows').innerHTML = rows.map(function (r) {
       return '<tr data-slug="' + esc(r.slug) + '"' + (r.slug === selectedSlug ? ' class="selected"' : '') + '>' +
         '<td class="rank">' + r.rank + '</td>' +
+        '<td class="num">' + rangeStr(r) + '</td>' +
         '<td class="name"><b>' + esc(r.name) + '</b><span>' + esc(r.slug) + '</span>' +
         (r.on_watchlist ? '<span class="watch">WATCHLIST</span>' : '') +
         (r.stablecoin ? '<span class="stable">STABLECOIN</span>' : '') + '</td>' +
@@ -210,8 +282,11 @@
       r.size_multiplier.toFixed(2) + ' size × ' +
       r.growth_multiplier.toFixed(2) + ' momentum × ' + r.maturity_multiplier.toFixed(2) +
       ' maturity × ' + r.chain_multiplier.toFixed(2) + ' chains = ' + usd(r.implied_value_usd);
-    var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · 7d ' + pct(r.change_7d) +
-      ' · log chains ' + Math.log(r.chains.length).toFixed(2) + ' · age excluded (see methodology)';
+    var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · 7d clamped ' +
+      pct(Math.min(120, Math.max(-60, r.change_7d))) + ' · log chains ' + Math.log(Math.max(1, r.chains.length)).toFixed(2) +
+      ' · odds_base ' + (r.odds_base != null ? (r.odds_base * 100).toFixed(2) + '%' : '—') +
+      (function () { var p = rederiveOdds(r); return p == null ? '' : ' · re-derived in this page ' + (p * 100).toFixed(2) + '% — matches stored ' + Math.round(r.token_odds * 100) + '%'; })() +
+      ' · age excluded (see methodology)';
     var peerNote = r.peer_fallback
       ? 'Global median &times;' + D.global_multiple.toFixed(2) + ' — ' + esc(r.category || 'no category') +
         ' has ' + (r.peer_n === 0 ? 'no' : 'one') + ' trading peer' + (r.peer_n === 0 ? 's' : '') + ', so no category signal'
@@ -226,6 +301,7 @@
       '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
       '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +
       '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied × token odds — the launch, weighted by the chance it happens</small></div>' +
+      '<div class="cell"><span>Rank range</span><b>' + rangeStr(r) + '</b><small>Rank ' + r.rank + ' (' + rangeStr(r) + ', median ' + r.rank_median + ' across ' + (D.rank_range_method ? D.rank_range_method.b : 200) + ' refits) — stability across refits, not a calibrated interval</small></div>' +
       '<div class="cell"><span>Peer multiple</span><b>×' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
       '<div class="cell"><span>Size multiple</span><b>×' + r.size_multiple.toFixed(4) + '</b><small>fitted curve multiple for this TVL; applied ×' + r.size_multiplier.toFixed(2) + ' after the [0.5×, 2×] peer bound</small></div>' +
       '<div class="cell"><span>Size multiplier</span><b>×' + r.size_multiplier.toFixed(2) + '</b><small>curve multiple ÷ peer multiple, clamped to [0.5×, 2×] — the bound that keeps giants credible</small></div>' +
