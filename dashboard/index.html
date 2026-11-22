@@ -17,17 +17,42 @@
 </header>
 
 <main>
+  <section class="top5" id="top5">
+    <h2>Top launch candidates</h2>
+    <p class="note">The five highest <b>expected</b> values among protocols whose token does not already exist:
+    implied launch value times the token odds. Expected value is the number a farmer decides on —
+    a huge launch that will probably never happen is worth less than a smaller one that likely will.
+    Stablecoins are left out here — their token already trades, so there is no launch to rank —
+    but they stay on the board below, flagged, because the watchlist floor requires them.</p>
+    <div id="top5List"></div>
+  </section>
+
   <section class="method" id="method">
     <h2>How the radar prices a launch</h2>
     <p>Implied value = TVL &times; peer multiple &times; momentum &times; maturity &times; chain breadth.
     The peer multiple is the median market-cap-to-TVL of the token-bearing protocols in the same
-    category, computed from this snapshot — never typed in. Momentum is the 7-day TVL change, clamped
-    and log-scaled so one wild week cannot explode a row. Maturity rewards time spent running with no
-    token, saturating at three years. Chain breadth adds up to 10% for multi-chain protocols.</p>
+    category, computed from this snapshot — never typed in. A category with exactly two trading
+    peers gets a log-space blend of its own median and the global median, capped at twice the
+    global median, so two observations move the estimate but cannot dominate it. A category with
+    fewer than two peers falls back to the global median: one peer is not a category signal, and
+    in this snapshot the lone peer of a thin category is often a miscategorised outlier. Momentum
+    is the 7-day TVL change, clamped and log-scaled so one wild week cannot explode a row.
+    Maturity rewards time spent running with no token, saturating at three years. Chain breadth
+    adds up to 10% for multi-chain protocols.</p>
+    <p>Token odds are the chance a protocol ever launches a token, read off its category's own
+    record: the share of the category's protocols that already have one, shrunk toward the
+    snapshot-wide share (19%) with a prior of ten protocols, so a thin category cannot claim
+    certainty. Expected value is the implied launch value times the token odds. Every farm plan
+    is costed — capital plus gas — and the detail view nets the gas against the expected value,
+    so the verdict is a number, not a feeling.</p>
     <p class="note">Implied value is this entry's own claim from the snapshot's figures. It is not a
     prediction that a token will be issued, or when, or at what price. A protocol is called pre-token
-    only because its record carries no token — its record may still miss one.</p>
+    only because its record carries no token — its record may still miss one. Stablecoins are not
+    launch candidates: their token already exists and trades, pegged. They are left out of the
+    early radar; the two on the watchlist stay on the board, flagged, because the watchlist is
+    the floor.</p>
     <div id="peers"></div>
+    <p class="note" id="coverage"></p>
   </section>
 
   <section class="controls">
@@ -45,6 +70,8 @@
     <label>Sort <select id="sort">
       <option value="rank">Rank</option>
       <option value="implied_value_usd">Implied value</option>
+      <option value="expected_value_usd">Expected value</option>
+      <option value="token_odds">Token odds</option>
       <option value="tvl_usd">TVL</option>
       <option value="change_7d">7-day change</option>
       <option value="age_days">Age</option>
@@ -63,6 +90,7 @@
         <th data-sort="change_7d">7d</th>
         <th data-sort="age_days">Age</th>
         <th data-sort="chains">Chains</th>
+        <th data-sort="token_odds">Odds</th>
         <th data-sort="implied_value_usd">Implied value</th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -91,8 +119,9 @@
 </main>
 
 <footer>
-  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-2 &middot;
+  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-3 &middot;
   floor $50M &middot; board <span id="boardSize"></span> rows</p>
+  <p id="integrity"></p>
 </footer>
 
 <script src="app.js"></script>

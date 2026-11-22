@@ -70,9 +70,20 @@ tbody tr.selected { background: var(--surface2); }
 .name b { display: block; font-weight: 600; }
 .name span { color: var(--muted); font-size: 12.5px; }
 .watch { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: var(--accent); color: #191204; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+.stable { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: var(--blue); color: #0c1a2e; font-size: 11px; font-weight: 700; vertical-align: 1px; }
 .up { color: var(--green); }
 .down { color: var(--red); }
 .implied { font-weight: 700; }
+
+/* Top launch candidates: five cards, the first thing the page shows after the header. */
+.top5 #top5List { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.top5card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.top5card .top5rank { color: var(--accent); font-weight: 700; font-size: 13px; }
+.top5card b { display: block; font-size: 16px; margin: 2px 0; }
+.top5card .top5val { display: block; font-size: 20px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.top5card .top5meta { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.stable-note { background: var(--surface2); border: 1px solid var(--blue); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
+.verdict { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; margin-top: 14px; }
 
 .detail {
   margin-top: 28px; padding: 20px 22px; background: var(--surface);
@@ -101,5 +112,5 @@ footer p { margin: 0; }
 
 @media (max-width: 720px) {
   .top, main { padding-left: 16px; padding-right: 16px; }
-  th:nth-child(6), td:nth-child(6), th:nth-child(7), td:nth-child(7) { display: none; }
+  th:nth-child(6), td:nth-child(6), th:nth-child(7), td:nth-child(7), th:nth-child(8), td:nth-child(8) { display: none; }
 }

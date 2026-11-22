@@ -1,4 +1,4 @@
-// Token launch radar, model radar-2: peer multiples + log momentum + maturity + chain breadth.
+// Token launch radar, model radar-3: peer multiples + log momentum + maturity + chain breadth.
 //
 // The board ranks every pre-token protocol the snapshot carries that is not a wrapped, staked or
 // bridged product of a token that already trades. The watchlist is the floor, never the ceiling:
@@ -8,15 +8,32 @@
 // the same functions score every row, and the peer multiples are computed from this snapshot at run
 // time, never typed in by hand:
 //
-//   peer     = median mcap/tvl of the token-bearing protocols in the same category (n >= 3,
-//              clamped to [0.02, 1.5]); a category with fewer peers falls back to the global
-//              median of all token-bearing protocols (same clamp)
+//   peer     = the category's median mcap/tvl when it has at least 3 token-bearing peers
+//              (clamped to [0.02, 1.5]); a category with exactly 2 peers gets a log-space blend
+//              of its own median and the global median, capped at twice the global median, so two
+//              observations move the estimate but cannot dominate it; a category with fewer than 2
+//              peers falls back to the global median of all token-bearing protocols (same clamp).
+//              A single peer is not a category signal: its multiple is one observation, often a
+//              miscategorised outlier, so it never prices a row on its own.
 //   growth   = clamp(change_7d, -60, 120); mapped through a signed log so one +4,448% week
 //              cannot explode a row: growthMult = 1 + 0.5 * sign(g) * ln(1+|g|) / ln(121)
 //   maturity = 0.7 + 0.3 * min(age_days, 1095) / 1095 (age unknown: 365 days); age saturates,
 //              so being old alone never carries a row
 //   chains   = 1 + 0.02 * min(chains - 1, 5), capped at +10%
 //   implied  = max(1, round(tvl_usd * peer * growthMult * maturity * chains))
+//
+// Stablecoins are not launch candidates: their token already exists and trades, pegged, so ranking
+// one as a pre-token launch is a snapshot artifact. The stablecoin categories and a short denylist
+// of stablecoins whose category does not say so are excluded from the early radar. Watchlist slugs
+// are the floor and cannot be left out, so a stablecoin on the watchlist stays on the board, flagged
+// as a stablecoin, and the dashboard says so.
+//
+// Token odds are the chance a protocol ever launches a token, from the peers' record: the share
+// of protocols in its category that already have one, shrunk toward the global share with a
+// Beta prior so a thin category cannot claim certainty. Expected value is the implied launch
+// value times the token odds — what the launch is worth once the chance it happens is counted.
+// The board stays sorted by implied value; the dashboard's top candidates are ranked by expected
+// value, which is the number a farmer actually decides on.
 //
 // A protocol is pre-token when its record carries no token: no market cap, no CoinGecko id, no
 // symbol. The live-token protocols are kept apart and shown with the market's own values, never
@@ -50,6 +67,8 @@ export interface ModelConstants {
   peer_min_n: number;
   peer_mult_min: number;
   peer_mult_max: number;
+  peer_thin_cap_mult: number;
+  odds_prior_n: number;
   growth_floor: number;
   growth_cap: number;
   growth_weight: number;
@@ -65,6 +84,8 @@ export const MODEL: ModelConstants = {
   peer_min_n: 3,
   peer_mult_min: 0.02,
   peer_mult_max: 1.5,
+  peer_thin_cap_mult: 2,
+  odds_prior_n: 10,
   growth_floor: -60,
   growth_cap: 120,
   growth_weight: 0.5,
@@ -77,7 +98,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -105,6 +126,10 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  token_odds: number;
+  expected_value_usd: number;
+  farm_capital_usd: number;
+  farm_gas_usd: number;
   on_watchlist: boolean;
   model: {
     peer_multiple: number;
@@ -131,10 +156,17 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  token_odds: number;
+  expected_value_usd: number;
+  farm_capital_usd: number;
+  farm_gas_usd: number;
   peer_multiple: number;
+  peer_n: number;
+  peer_fallback: boolean;
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  stablecoin: boolean;
   on_watchlist: boolean;
   farm_steps: string[];
 }
@@ -173,6 +205,8 @@ export interface RadarData {
   floor_usd: number;
   model: ModelConstants;
   model_version: string;
+  snapshot_protocols: number;
+  snapshot_with_token: number;
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -251,11 +285,60 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
   return { byCategory: table, global };
 }
 
-/** The peer multiple a category gets: its own median when it has enough peers, else the global one. */
+/**
+ * The peer multiple a category gets. Three or more trading peers: the category's own median.
+ * Exactly two peers: a log-space blend of the category median and the global median, weighted
+ * 2/3 to the category, capped at twice the global median — two observations move the estimate
+ * but cannot dominate it, and the log blend keeps a right-skewed multiple from exploding the row.
+ * Fewer than two peers: the global median. One peer is not a category signal: it is a single
+ * observation, and in this snapshot the lone peer of a thin category is often a miscategorised
+ * outlier (the Risk Curators category's only trading peer is an oracle, not a vault curator).
+ */
 export function peerMultipleFor(category: string | null, peers: PeerTable, model: ModelConstants = MODEL): { multiple: number; n: number; fallback: boolean } {
   const entry = category === null ? undefined : peers.byCategory.get(category);
-  if (entry !== undefined && entry.n >= model.peer_min_n) return { multiple: entry.multiple, n: entry.n, fallback: false };
-  return { multiple: peers.global, n: entry?.n ?? 0, fallback: true };
+  const n = entry?.n ?? 0;
+  if (entry !== undefined && n >= model.peer_min_n) return { multiple: entry.multiple, n, fallback: false };
+  if (entry !== undefined && n === model.peer_min_n - 1) {
+    const w = n / model.peer_min_n;
+    const logBlend = Math.exp(w * Math.log(entry.multiple) + (1 - w) * Math.log(peers.global));
+    const capped = Math.min(logBlend, model.peer_thin_cap_mult * peers.global);
+    const multiple = Math.min(model.peer_mult_max, Math.max(model.peer_mult_min, capped));
+    return { multiple, n, fallback: false };
+  }
+  return { multiple: peers.global, n, fallback: true };
+}
+
+/** The token odds: for every category, how many of its protocols already have a token. */
+export interface OddsTable {
+  byCategory: Map<string, { withToken: number; total: number }>;
+  globalRate: number;
+}
+
+export function tokenOddsTable(snapshot: Snapshot): OddsTable {
+  const byCategory = new Map<string, { withToken: number; total: number }>();
+  let withToken = 0;
+  for (const p of snapshot.protocols) {
+    const key = p.category ?? '(no category)';
+    const e = byCategory.get(key) ?? { withToken: 0, total: 0 };
+    e.total++;
+    if (p.mcap_usd !== null) { e.withToken++; withToken++; }
+    byCategory.set(key, e);
+  }
+  return { byCategory, globalRate: snapshot.protocols.length === 0 ? 0 : withToken / snapshot.protocols.length };
+}
+
+/**
+ * The chance a protocol ever launches a token, from its category's record: the share of the
+ * category's protocols that already have one, shrunk toward the global share with a Beta prior
+ * of `odds_prior_n` protocols, so a thin category cannot claim certainty. A category with no
+ * record at all takes the global share. Rounded to four decimals, so the board is deterministic.
+ */
+export function tokenOddsFor(category: string | null, odds: OddsTable, model: ModelConstants = MODEL): number {
+  const entry = category === null ? undefined : odds.byCategory.get(category);
+  if (entry === undefined) return Math.round(odds.globalRate * 1e4) / 1e4;
+  const prior = model.odds_prior_n * odds.globalRate;
+  const oddsValue = (entry.withToken + prior) / (entry.total + model.odds_prior_n);
+  return Math.round(oddsValue * 1e4) / 1e4;
 }
 
 /** The signed-log momentum multiplier for a clamped 7-day change in per cent. */
@@ -308,6 +391,23 @@ const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 /** Categories that are a wrapped, staked or bridged product of a token that already trades. */
 const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Cross Chain Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
 
+/** Categories whose product is a stablecoin: the token already exists and trades, pegged. */
+const STABLECOIN_CATEGORIES = new Set(['Algo-Stables', 'Dual-Token Stablecoin', 'Stablecoin Issuer', 'Stablecoin Wrapper']);
+
+/**
+ * Stablecoins whose category does not say so. USDD is a decentralised stablecoin whose token
+ * already trades; the snapshot carries no market cap, CoinGecko id or symbol for it, so the
+ * pre-token test alone would rank it as a launch. The denylist corrects that snapshot artifact.
+ * It names slugs, not names, and it is the only hand-kept list in the model.
+ */
+const STABLECOIN_DENYLIST = new Set(['usdd']);
+
+/** Whether a protocol is a stablecoin, by category or by the denylist. */
+export function isStablecoin(p: SnapshotProtocol): boolean {
+  if (p.category !== null && STABLECOIN_CATEGORIES.has(p.category)) return true;
+  return STABLECOIN_DENYLIST.has(p.slug);
+}
+
 /** Exchange names a fresh launch never starts with. */
 const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
 
@@ -321,6 +421,11 @@ const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
 export function exclusionReason(p: SnapshotProtocol): string | null {
   if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) {
     return `Category ${p.category}: a wrapped, staked or bridged product, not a fresh launch`;
+  }
+  if (isStablecoin(p)) {
+    return p.category !== null && STABLECOIN_CATEGORIES.has(p.category)
+      ? `Category ${p.category}: a stablecoin, whose token already exists and trades`
+      : 'Stablecoin: its token already exists and trades, so there is no launch to rank';
   }
   if (WRAPPED_WORD.test(p.name)) return 'Name carries wrapped, staked or staking';
   if (EXCHANGE_PREFIXES.some((x) => p.name.startsWith(x))) return 'Name starts with an exchange name';
@@ -341,6 +446,7 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const peers = peerMultiples(snapshot, model);
+  const odds = tokenOddsTable(snapshot);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names is ranked, even one the snapshot no longer
@@ -357,7 +463,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, peers, model);
-    return { p, v };
+    const tokenOdds = tokenOddsFor(p.category, odds, model);
+    const cost = farmCost(p, v.age);
+    return { p, v, tokenOdds, expected: Math.max(1, Math.round(v.implied * tokenOdds)), cost };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -375,6 +483,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     token_status: 'pre-token' as const,
     age_days: s.v.age,
     implied_value_usd: s.v.implied,
+    token_odds: s.tokenOdds,
+    expected_value_usd: s.expected,
+    farm_capital_usd: s.cost.capital,
+    farm_gas_usd: s.cost.gas,
     on_watchlist: snapshot.watchlist.includes(s.p.slug),
     model: {
       peer_multiple: round4(s.v.peer.multiple),
@@ -465,6 +577,17 @@ function weeklyFor(p: SnapshotProtocol): string {
   if (c.includes('curator') || c.includes('allocator') || c.includes('vault')) return 'a deposit, a rebalance, or a governance vote';
   if (c.includes('prediction')) return 'a market position or a resolution vote';
   return 'a deposit, a swap, or a vote';
+}
+
+/** What the farm plan costs: the capital it ties up (refundable, still yours) and the gas it
+ * burns (not refundable). The gas is the steps' own figures added up: about $3 to open the fresh
+ * wallet, $4–$8 for the first deposit, and about $2 a week for the qualifying actions over the
+ * hold window. It is the number the farm verdict is netted against. */
+export function farmCost(p: SnapshotProtocol, age: number | null): { capital: number; gas: number; hold: number } {
+  const capital = capitalFor(p);
+  const hold = holdDaysFor(age);
+  const gas = 3 + (capital >= 150 ? 8 : 4) + Math.ceil(hold / 7) * 2;
+  return { capital, gas, hold };
 }
 
 /** One curated farm plan: six steps, each an action with a cost and a time. */
@@ -696,10 +819,12 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-/** The pre-token protocols the board leaves out, with the reason each one was left out. */
+/** The pre-token protocols the board leaves out, with the reason each one was left out. Watchlist
+ * slugs are never listed here: the floor puts them on the board even when the exclusion rule would
+ * leave them out, and the dashboard flags those instead. */
 export function excludedRows(snapshot: Snapshot): ExcludedRow[] {
   return snapshot.protocols
-    .filter((p) => isPreToken(p) && exclusionReason(p) !== null)
+    .filter((p) => isPreToken(p) && exclusionReason(p) !== null && !snapshot.watchlist.includes(p.slug))
     .map((p) => ({
       slug: p.slug,
       name: p.name,
@@ -723,10 +848,17 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    token_odds: row.token_odds,
+    expected_value_usd: row.expected_value_usd,
+    farm_capital_usd: row.farm_capital_usd,
+    farm_gas_usd: row.farm_gas_usd,
     peer_multiple: row.model.peer_multiple,
+    peer_n: row.model.peer_n,
+    peer_fallback: row.model.peer_fallback,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    stablecoin: isStablecoin({ slug: row.slug, name: row.name, category: row.category, chains: row.chains, tvl_usd: row.tvl_usd, change_7d: row.change_7d, mcap_usd: row.mcap_usd, listed_at: row.listed_at, gecko_id: row.gecko_id, symbol: row.symbol }),
     on_watchlist: row.on_watchlist,
     farm_steps: row.farm_steps,
   };
@@ -738,9 +870,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const live = liveRows(snapshot);
   const peers = peerMultiples(snapshot, model);
   const early = board.filter((r) => !r.on_watchlist).length;
-  const peerTable: PeerEntry[] = [...peers.byCategory.entries()]
-    .filter(([, v]) => v.n >= model.peer_min_n)
-    .map(([category, v]) => ({ category, multiple: round4(v.multiple), n: v.n }))
+  // The peer table shows the multiple each ranked category actually gets: the category median
+  // at n >= 3, the log-space blend at n = 2, and nothing for categories with fewer peers.
+  const boardCats = new Set(board.map((r) => r.category).filter((c): c is string => c !== null));
+  const peerTable: PeerEntry[] = [...boardCats]
+    .map((category) => {
+      const p = peerMultipleFor(category, peers, model);
+      return { category, multiple: round4(p.multiple), n: p.n, fallback: p.fallback };
+    })
+    .filter((p) => !p.fallback)
+    .map(({ category, multiple, n }) => ({ category, multiple, n }))
     .sort((a, b) => b.n - a.n || (a.category < b.category ? -1 : 1));
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -748,6 +887,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     floor_usd: snapshot.floor_usd,
     model,
     model_version: MODEL_VERSION,
+    snapshot_protocols: snapshot.protocols.length,
+    snapshot_with_token: snapshot.protocols.filter((p) => p.mcap_usd !== null).length,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
@@ -820,6 +961,8 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     if (steps.length < 3 || steps.length > 12) return `${r.slug} has ${steps.length} farm steps`;
     for (const s of steps) if (s.length < 20 || s.length > 600) return `${r.slug} has a farm step of ${s.length} characters`;
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
+    if (typeof r.token_odds !== 'number' || !(r.token_odds >= 0 && r.token_odds <= 1)) return `${r.slug} has token odds ${r.token_odds}`;
+    if (!Number.isSafeInteger(r.expected_value_usd) || r.expected_value_usd <= 0 || r.expected_value_usd > r.implied_value_usd) return `${r.slug} has expected value ${r.expected_value_usd}`;
   }
   return null;
 }

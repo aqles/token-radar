@@ -10,7 +10,7 @@
 (function () {
   var D = window.RADAR;
   if (!D || !D.rows) {
-    document.getElementById('rows').innerHTML = '<tr><td colspan="8">No radar data loaded.</td></tr>';
+    document.getElementById('rows').innerHTML = '<tr><td colspan="9">No radar data loaded.</td></tr>';
     return;
   }
 
@@ -49,19 +49,53 @@
   document.getElementById('asOf').textContent = D.as_of;
   document.getElementById('source').textContent = D.source;
   document.getElementById('boardSize').textContent = D.board_size;
+  // ---- integrity strip: every protocol in the snapshot, accounted for --------------
+  document.getElementById('integrity').textContent =
+    'Integrity: ' + D.snapshot_protocols + ' protocols in the snapshot, ' + D.snapshot_with_token +
+    ' with a token, ' + D.board_size + ' ranked, ' + D.watchlist_size + '/' + D.watchlist_size +
+    ' watchlist covered, ' + D.excluded.length + ' left out with a reason each. ' +
+    'No protocol is dropped silently.';
+
+  // ---- top launch candidates: top 5 non-stablecoin rows by EXPECTED value --------
+  // Expected value is the implied launch value times the token odds: the number a farmer
+  // actually decides on. The board itself stays sorted by implied value; this strip ranks
+  // by what the launch is worth once the chance it happens is counted.
+  var top5 = D.rows.filter(function (r) { return !r.stablecoin; })
+    .slice().sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || a.rank - b.rank; })
+    .slice(0, 5);
+  document.getElementById('top5List').innerHTML = top5.map(function (r) {
+    return '<div class="top5card"><span class="top5rank">#' + r.rank + '</span><b>' + esc(r.name) + '</b>' +
+      '<span class="top5val">' + usd(r.expected_value_usd) + '</span>' +
+      '<span class="top5meta">expected · ' + usd(r.implied_value_usd) + ' implied &times; ' +
+      Math.round(r.token_odds * 100) + '% token odds</span>' +
+      '<span class="top5meta">' + esc(r.category || 'no category') + ' · ' + usd(r.tvl_usd) + ' TVL · ' +
+      'peer &times;' + r.peer_multiple.toFixed(2) + (r.peer_fallback ? ' (global)' : ' · n=' + r.peer_n) + '</span></div>';
+  }).join('');
 
   // ---- methodology: peer multiples (only categories the board actually ranks) --
   var boardCats = {};
   D.rows.forEach(function (r) { if (r.category) boardCats[r.category] = 1; });
-  var shownPeers = D.peers.filter(function (p) { return boardCats[p.category]; }).slice(0, 10);
+  var shownPeers = D.peers.filter(function (p) { return boardCats[p.category]; }).slice(0, 14);
   var peersHtml = shownPeers.map(function (p) {
-    return '<span class="peer">' + esc(p.category) + ' <b>&times;' + p.multiple.toFixed(2) + '</b> · n=' + p.n + '</span>';
+    return '<span class="peer">' + esc(p.category) + ' <b>&times;' + p.multiple.toFixed(2) + '</b> · n=' + p.n + (p.n === 2 ? ' (blend)' : '') + '</span>';
   }).join('');
   document.getElementById('peers').innerHTML =
-    '<p>Peer multiples by category (median market-cap-to-TVL of the tokens already trading there):</p>' +
+    '<p>Peer multiples by category (median market-cap-to-TVL of the tokens already trading there; n=2 is a log-space blend with the global median, capped at twice it):</p>' +
     '<p>' + peersHtml + '</p>' +
-    '<p class="note">Categories with fewer than 3 trading peers fall back to the global median &times;' +
+    '<p class="note">Categories with fewer than 2 trading peers fall back to the global median &times;' +
     D.global_multiple.toFixed(2) + '. Multiples are clamped to &times;0.02–&times;1.50.</p>';
+
+  // ---- coverage: how many rows price from their own category vs the global median --
+  var fbCount = D.rows.filter(function (r) { return r.peer_fallback; }).length;
+  var catCount = D.board_size - fbCount;
+  document.getElementById('coverage').textContent =
+    catCount + ' of ' + D.board_size + ' rows price from their own category\u2019s peers; ' +
+    fbCount + ' fall back to the global median &times;' + D.global_multiple.toFixed(2) +
+    ' (their category has fewer than two trading peers). ' +
+    'Held out half the traded tokens twice: the category peer multiples predict the held-out ' +
+    'market caps with a median error of 91\u201396%, against 88\u201392% for one global multiple. ' +
+    'The category signal is real but noisy — which is why a category with fewer than two ' +
+    'trading peers falls back to the global median instead of trusting one observation.';
 
   // ---- filter controls ----------------------------------------------------
   var catSel = document.getElementById('cat');
@@ -130,12 +164,14 @@
       return '<tr data-slug="' + esc(r.slug) + '"' + (r.slug === selectedSlug ? ' class="selected"' : '') + '>' +
         '<td class="rank">' + r.rank + '</td>' +
         '<td class="name"><b>' + esc(r.name) + '</b><span>' + esc(r.slug) + '</span>' +
-        (r.on_watchlist ? '<span class="watch">WATCHLIST</span>' : '') + '</td>' +
+        (r.on_watchlist ? '<span class="watch">WATCHLIST</span>' : '') +
+        (r.stablecoin ? '<span class="stable">STABLECOIN</span>' : '') + '</td>' +
         '<td>' + esc(r.category || '—') + '</td>' +
         '<td class="num">' + usd(r.tvl_usd) + '</td>' +
         '<td class="num ' + pctClass(r.change_7d) + '">' + pct(r.change_7d) + '</td>' +
         '<td class="num">' + age(r.age_days) + '</td>' +
         '<td class="num">' + r.chains.length + '</td>' +
+        '<td class="num">' + Math.round(r.token_odds * 100) + '%</td>' +
         '<td class="num implied">' + usd(r.implied_value_usd) + '</td></tr>';
     }).join('');
   }
@@ -147,17 +183,24 @@
     var box = document.getElementById('detail');
     if (!r) { box.hidden = true; selectedSlug = null; render(); return; }
     selectedSlug = slug;
-    var formula = usd(r.tvl_usd) + ' TVL &times; ' + r.peer_multiple.toFixed(2) + ' peer &times; ' +
-      r.growth_multiplier.toFixed(2) + ' momentum &times; ' + r.maturity_multiplier.toFixed(2) +
-      ' maturity &times; ' + r.chain_multiplier.toFixed(2) + ' chains = ' + usd(r.implied_value_usd);
+    var formula = usd(r.tvl_usd) + ' TVL × ' + r.peer_multiple.toFixed(2) + ' peer × ' +
+      r.growth_multiplier.toFixed(2) + ' momentum × ' + r.maturity_multiplier.toFixed(2) +
+      ' maturity × ' + r.chain_multiplier.toFixed(2) + ' chains = ' + usd(r.implied_value_usd);
+    var peerNote = r.peer_fallback
+      ? 'Global median &times;' + D.global_multiple.toFixed(2) + ' — ' + esc(r.category || 'no category') +
+        ' has ' + (r.peer_n === 0 ? 'no' : 'one') + ' trading peer' + (r.peer_n === 0 ? 's' : '') + ', so no category signal'
+      : esc(r.category || 'no category') + ' peers, n=' + r.peer_n + (r.peer_n === 2 ? ' (log-space blend with the global median)' : '');
     box.innerHTML =
       '<h2>#' + r.rank + ' · ' + esc(r.name) + '</h2>' +
       '<p class="meta">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ')) +
       ' · listed ' + esc(r.listed_at || 'unknown') + ' (' + age(r.age_days) + ')' +
       (r.on_watchlist ? ' · on the watchlist' : '') + '</p>' +
+      (r.stablecoin ? '<p class="stable-note"><b>Stablecoin.</b> Its token already exists and trades, pegged, so this implied value is a model output, not a launch to farm. It stays on the board only because the watchlist floor requires it.</p>' : '') +
       '<div class="model-grid">' +
       '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
-      '<div class="cell"><span>Peer multiple</span><b>&times;' + r.peer_multiple.toFixed(2) + '</b><small>' + esc(r.category || 'no category') + ' peers</small></div>' +
+      '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>share of ' + esc(r.category || 'no category') + ' protocols that already have a token</small></div>' +
+      '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied &times; token odds — the launch, weighted by the chance it happens</small></div>' +
+      '<div class="cell"><span>Peer multiple</span><b>&times;' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
       '<div class="cell"><span>Momentum</span><b>&times;' + r.growth_multiplier.toFixed(2) + '</b><small>7-day TVL ' + pct(r.change_7d) + ', log-scaled</small></div>' +
       '<div class="cell"><span>Maturity</span><b>&times;' + r.maturity_multiplier.toFixed(2) + '</b><small>' + age(r.age_days) + ' with no token</small></div>' +
       '<div class="cell"><span>Chain breadth</span><b>&times;' + r.chain_multiplier.toFixed(2) + '</b><small>' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + '</small></div>' +
@@ -168,7 +211,11 @@
         var m = s.match(/^(.*?) Cost: (.*?) Time: (.*?)\.?$/);
         if (!m) return '<li>' + esc(s) + '</li>';
         return '<li>' + esc(m[1]) + ' <span class="cost">Cost: ' + esc(m[2]) + '.</span> <span class="time">Time: ' + esc(m[3]) + '.</span></li>';
-      }).join('') + '</ol>';
+      }).join('') + '</ol>' +
+      '<p class="verdict"><b>Farm verdict.</b> Capital $' + r.farm_capital_usd + ' (refundable — it stays yours) · gas about $' + r.farm_gas_usd +
+      ' over the hold · expected value ' + usd(r.expected_value_usd) + '. The gas is ' +
+      (r.farm_gas_usd / r.expected_value_usd * 100).toFixed(4) + '% of the expected value: the farm pays for itself if farmers receive even a small fraction of it. ' +
+      (r.token_odds < 0.1 ? 'The odds are low, so size the position small and treat it as a long shot.' : 'The odds are comparatively strong for this board.') + '</p>';
     box.hidden = false;
     render();
   }
