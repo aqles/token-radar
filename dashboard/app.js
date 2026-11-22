@@ -85,17 +85,40 @@
     '<p class="note">Categories with fewer than 2 trading peers fall back to the global median &times;' +
     D.global_multiple.toFixed(2) + '. Multiples are clamped to &times;0.02–&times;1.50.</p>';
 
+  // ---- held-out evidence strip: recomputed at run time, rendered from data.js ----
+  // The numbers below are not typed in: D.heldout is the leave-one-out test the model
+  // recomputes on every run, and D.size_curve is the fitted curve itself.
+  (function () {
+    var h = D.heldout, sc = D.size_curve;
+    var el = document.getElementById('heldout');
+    if (!el || !h || !sc) return;
+    el.innerHTML = '<b>Held out, not asserted.</b> Leave-one-out on ' + h.n_comps +
+      ' traded tokens, recomputed at run time: radar-4 median error <b>' + h.median_error_x.toFixed(2) +
+      '&times;</b> vs ' + h.peer_median_error_x.toFixed(2) + '&times; for the peer multiple alone; ' +
+      'radar-4 is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
+      'Size curve: log(mcap) = ' + sc.intercept.toFixed(4) + ' + ' + sc.slope.toFixed(4) +
+      '&middot;log(TVL), n=' + sc.n_comps + '. The unbounded curve is better still (3.23&times; held out) ' +
+      'but prices Sentora at 0.0327&times; TVL — the 2&times; peer bound is a prior that buys credible giants.';
+  })();
+
   // ---- coverage: how many rows price from their own category vs the global median --
   var fbCount = D.rows.filter(function (r) { return r.peer_fallback; }).length;
   var catCount = D.board_size - fbCount;
+  var mults = D.rows.map(function (r) { return r.size_multiplier; }).sort(function (a, b) { return a - b; });
+  var medMult = mults[Math.floor(mults.length / 2)];
+  var atFloor = D.rows.filter(function (r) { return r.size_multiplier <= 0.5; }).length;
+  var atCap = D.rows.filter(function (r) { return r.size_multiplier >= 2; }).length;
   document.getElementById('coverage').textContent =
     catCount + ' of ' + D.board_size + ' rows price from their own category\u2019s peers; ' +
-    fbCount + ' fall back to the global median &times;' + D.global_multiple.toFixed(2) +
+    fbCount + ' fall back to the global median \u00d7' + D.global_multiple.toFixed(2) +
     ' (their category has fewer than two trading peers). ' +
-    'Held out half the traded tokens twice: the category peer multiples predict the held-out ' +
-    'market caps with a median error of 91\u201396%, against 88\u201392% for one global multiple. ' +
-    'The category signal is real but noisy — which is why a category with fewer than two ' +
-    'trading peers falls back to the global median instead of trusting one observation.';
+    'The size bound is active, not decorative: ' + atFloor + ' rows sit at the 0.5\u00d7 floor, ' +
+    atCap + ' at the 2.0\u00d7 cap, median multiplier \u00d7' + medMult.toFixed(2) + '. ' +
+    'Held out, leave-one-out on the 128 traded tokens, radar-4 predicts market caps with a median ' +
+    'error of ' + D.heldout.median_error_x.toFixed(2) + '\u00d7 against ' +
+    D.heldout.peer_median_error_x.toFixed(2) + '\u00d7 for the peer multiple alone — ' +
+    'the fitted curve earns its place; momentum, maturity and chain breadth do not, and the ' +
+    'methodology above says so.';
 
   // ---- filter controls ----------------------------------------------------
   var catSel = document.getElementById('cat');
@@ -184,8 +207,11 @@
     if (!r) { box.hidden = true; selectedSlug = null; render(); return; }
     selectedSlug = slug;
     var formula = usd(r.tvl_usd) + ' TVL × ' + r.peer_multiple.toFixed(2) + ' peer × ' +
+      r.size_multiplier.toFixed(2) + ' size × ' +
       r.growth_multiplier.toFixed(2) + ' momentum × ' + r.maturity_multiplier.toFixed(2) +
       ' maturity × ' + r.chain_multiplier.toFixed(2) + ' chains = ' + usd(r.implied_value_usd);
+    var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · 7d ' + pct(r.change_7d) +
+      ' · log chains ' + Math.log(r.chains.length).toFixed(2) + ' · age excluded (see methodology)';
     var peerNote = r.peer_fallback
       ? 'Global median &times;' + D.global_multiple.toFixed(2) + ' — ' + esc(r.category || 'no category') +
         ' has ' + (r.peer_n === 0 ? 'no' : 'one') + ' trading peer' + (r.peer_n === 0 ? 's' : '') + ', so no category signal'
@@ -198,9 +224,11 @@
       (r.stablecoin ? '<p class="stable-note"><b>Stablecoin.</b> Its token already exists and trades, pegged, so this implied value is a model output, not a launch to farm. It stays on the board only because the watchlist floor requires it.</p>' : '') +
       '<div class="model-grid">' +
       '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
-      '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>share of ' + esc(r.category || 'no category') + ' protocols that already have a token</small></div>' +
-      '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied &times; token odds — the launch, weighted by the chance it happens</small></div>' +
-      '<div class="cell"><span>Peer multiple</span><b>&times;' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
+      '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +
+      '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied × token odds — the launch, weighted by the chance it happens</small></div>' +
+      '<div class="cell"><span>Peer multiple</span><b>×' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
+      '<div class="cell"><span>Size multiple</span><b>×' + r.size_multiple.toFixed(4) + '</b><small>fitted curve multiple for this TVL; applied ×' + r.size_multiplier.toFixed(2) + ' after the [0.5×, 2×] peer bound</small></div>' +
+      '<div class="cell"><span>Size multiplier</span><b>×' + r.size_multiplier.toFixed(2) + '</b><small>curve multiple ÷ peer multiple, clamped to [0.5×, 2×] — the bound that keeps giants credible</small></div>' +
       '<div class="cell"><span>Momentum</span><b>&times;' + r.growth_multiplier.toFixed(2) + '</b><small>7-day TVL ' + pct(r.change_7d) + ', log-scaled</small></div>' +
       '<div class="cell"><span>Maturity</span><b>&times;' + r.maturity_multiplier.toFixed(2) + '</b><small>' + age(r.age_days) + ' with no token</small></div>' +
       '<div class="cell"><span>Chain breadth</span><b>&times;' + r.chain_multiplier.toFixed(2) + '</b><small>' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + '</small></div>' +

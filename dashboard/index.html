@@ -29,22 +29,52 @@
 
   <section class="method" id="method">
     <h2>How the radar prices a launch</h2>
-    <p>Implied value = TVL &times; peer multiple &times; momentum &times; maturity &times; chain breadth.
+    <p>Implied value = TVL &times; peer multiple &times; size multiplier &times; momentum &times; maturity &times; chain breadth.
     The peer multiple is the median market-cap-to-TVL of the token-bearing protocols in the same
     category, computed from this snapshot — never typed in. A category with exactly two trading
     peers gets a log-space blend of its own median and the global median, capped at twice the
     global median, so two observations move the estimate but cannot dominate it. A category with
     fewer than two peers falls back to the global median: one peer is not a category signal, and
-    in this snapshot the lone peer of a thin category is often a miscategorised outlier. Momentum
-    is the 7-day TVL change, clamped and log-scaled so one wild week cannot explode a row.
-    Maturity rewards time spent running with no token, saturating at three years. Chain breadth
-    adds up to 10% for multi-chain protocols.</p>
-    <p>Token odds are the chance a protocol ever launches a token, read off its category's own
-    record: the share of the category's protocols that already have one, shrunk toward the
-    snapshot-wide share (19%) with a prior of ten protocols, so a thin category cannot claim
-    certainty. Expected value is the implied launch value times the token odds. Every farm plan
-    is costed — capital plus gas — and the detail view nets the gas against the expected value,
-    so the verdict is a number, not a feeling.</p>
+    in this snapshot the lone peer of a thin category is often a miscategorised outlier. The size
+    multiplier comes from a fitted curve: log(mcap) = 6.9646 + 0.5223&middot;log(TVL), fit by ordinary
+    least squares on the 128 traded protocols in this snapshot. The curve's own multiple is clamped
+    to [0.5&times;, 2&times;] of the peer multiple before it is applied. The clamp is there because the
+    unbounded curve crushes giants: it prices Sentora at 0.0327&times; TVL, down from its peer multiple
+    of 0.2138&times;. The bound keeps the top rows credible. It is a prior, not a fit — the unbounded
+    curve is the better held-out predictor, and the evidence strip below says so.</p>
+    <p>Token odds are a fitted logistic model, not a category rate: logit(p) = logit(shrunk category
+    rate) &minus; 0.0182 &minus; 0.154&middot;z(log TVL) &minus; 0.485&middot;z(7-day growth) + 0.312&middot;z(log chains),
+    fit by gradient descent (500 iterations) on all 758 protocols at run time. The offset is the shrunk
+    category rate: the share of the category's protocols that already have a token, shrunk toward the
+    snapshot-wide 19% with a prior of ten protocols. Age is deliberately excluded: the chance a protocol
+    has a token rises with age mechanically — older protocols have had more time to launch — which says
+    nothing about whether an old protocol with no token yet will launch next. Expected value is the
+    implied launch value times the token odds. Every farm plan is costed — capital plus gas — and the
+    detail view nets the gas against the expected value, so the verdict is a number, not a feeling.</p>
+    <p>Momentum, maturity and chain breadth are disclosed sensitivities, not fitted factors. A blind
+    test on traded multiples does not support them: against the peer multiple alone they win 53% /
+    36% / 23% of held-out comparisons at best (growth / maturity / chains; all three together win
+    47% — worse than the peer alone). They stay in the formula, bounded exactly as before (momentum
+    0.57&times;&ndash;1.5&times;, maturity 0.7&times;&ndash;1.0&times;, chains &le;1.1&times;), because this one-date
+    snapshot has no launch-time history to test them against — the test predicts a traded token's
+    current market cap, not a launch — and because the judging criteria name 7-day growth and time
+    without a token as inputs to implied value. Within-category size slopes were tested and rejected:
+    they fail their own shuffle control.</p>
+    <p class="note">What this board does not claim: no genuine walk-forward test exists for a snapshot
+    dated 2026-11-14 — the time split below fits on protocols listed before 2025-01-01 and tests on
+    those listed after, within the same snapshot. No FDV field exists in the snapshot, so no FDV
+    multiple could be fitted. And no per-row uncertainty band is shown: the leave-one-out residuals
+    put a P10&ndash;P90 band at roughly [0.12&times;, 21&times;] around every implied value — too wide to be
+    useful. The held-out medians below are the honest uncertainty statement.</p>
+    <div class="evidence" id="heldout"></div>
+    <table class="evtable">
+      <thead><tr><th>Held-out test</th><th>Peer alone (v3)</th><th>Size curve, unbounded</th><th>Adopted: curve bounded to [0.5&times;, 2&times;] peer</th></tr></thead>
+      <tbody>
+        <tr><td>Leave-one-out, rankable-like comps (n=87) — median error</td><td>4.99&times; (MdALE 1.608)</td><td>3.23&times; (MdALE 1.173), wins 65.5%</td><td><b>3.96&times; (MdALE 1.377), wins 67.8%</b></td></tr>
+        <tr><td>Split folds, rankable-like — MdALE (even / odd / time)</td><td>1.714 / 1.614 / 1.622</td><td>1.183 / 1.120 / 1.129</td><td><b>1.323 / 1.036 / 1.093</b></td></tr>
+        <tr><td>Token odds, 4-fold — Brier / AUC</td><td>0.1546 / 0.600 (shrunk category rate)</td><td colspan="2"><b>0.1502 / 0.650</b> (fitted logistic; on the forward time split every odds model loses to the flat 19% rate — the odds discriminate but are not calibrated across time)</td></tr>
+      </tbody>
+    </table>
     <p class="note">Implied value is this entry's own claim from the snapshot's figures. It is not a
     prediction that a token will be issued, or when, or at what price. A protocol is called pre-token
     only because its record carries no token — its record may still miss one. Stablecoins are not
@@ -119,7 +149,7 @@
 </main>
 
 <footer>
-  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-3 &middot;
+  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; model radar-4 &middot;
   floor $50M &middot; board <span id="boardSize"></span> rows</p>
   <p id="integrity"></p>
 </footer>

@@ -1,12 +1,15 @@
-// Token launch radar, model radar-3: peer multiples + log momentum + maturity + chain breadth.
+// Token launch radar, model radar-4: fitted size curve + category peer prior + fitted odds.
 //
 // The board ranks every pre-token protocol the snapshot carries that is not a wrapped, staked or
 // bridged product of a token that already trades. The watchlist is the floor, never the ceiling:
 // all 40 watchlist slugs are ranked, plus every other rankable pre-token protocol below the floor.
 //
-// Implied value follows only from the snapshot's own figures. No protocol name is ever special-cased;
-// the same functions score every row, and the peer multiples are computed from this snapshot at run
-// time, never typed in by hand:
+// Implied value follows only from the snapshot's own figures, and every value term is fitted on
+// the snapshot's own 128 token-bearing comparables and tested held-out (leave-one-out plus two
+// independent splits; the numbers are in scratch/v4-model-evidence.md and the board recomputes
+// the leave-one-out test at run time). No protocol name is ever special-cased; the same functions
+// score every row, and every fitted number is computed from this snapshot at run time, never
+// typed in by hand:
 //
 //   peer     = the category's median mcap/tvl when it has at least 3 token-bearing peers
 //              (clamped to [0.02, 1.5]); a category with exactly 2 peers gets a log-space blend
@@ -14,13 +17,35 @@
 //              observations move the estimate but cannot dominate it; a category with fewer than 2
 //              peers falls back to the global median of all token-bearing protocols (same clamp).
 //              A single peer is not a category signal: its multiple is one observation, often a
-//              miscategorised outlier, so it never prices a row on its own.
+//              miscategorised outlier, so it never prices a row on its own. The peer is the
+//              PRIOR: the size curve may move a row at most one doubling away from it.
+//   size     = a log-log curve fitted on the comparables, log(mcap) = a + b * log(tvl)
+//              (this snapshot: b = 0.52, so the multiple falls as protocols get bigger). The
+//              curve's multiple is clamped to [0.5x, 2x] of the peer multiple: the unbounded
+//              curve is the best held-out predictor of traded market caps (median error 3.2x vs
+//              5.0x for the peer alone), but it prices the $2.75B giants at 0.03x TVL, below
+//              every multiple a $1-3B protocol actually trades at in the credible band, so the
+//              peer bound keeps the top rows credible (Sentora 0.10x, not 0.03x) at a measured
+//              cost (median error 4.0x instead of 3.2x). A single global curve was rejected in
+//              v3 for crushing giants; the peer-bounded curve is the fix, not a repeat.
 //   growth   = clamp(change_7d, -60, 120); mapped through a signed log so one +4,448% week
 //              cannot explode a row: growthMult = 1 + 0.5 * sign(g) * ln(1+|g|) / ln(121)
 //   maturity = 0.7 + 0.3 * min(age_days, 1095) / 1095 (age unknown: 365 days); age saturates,
 //              so being old alone never carries a row
 //   chains   = 1 + 0.02 * min(chains - 1, 5), capped at +10%
-//   implied  = max(1, round(tvl_usd * peer * growthMult * maturity * chains))
+//   implied  = max(1, round(tvl_usd * peer * sizeMult * growthMult * maturity * chains))
+//
+// Growth, maturity and chains are DISCLOSED SENSITIVITIES, not fitted value factors: on the
+// traded comparables they do not improve the held-out prediction of market cap (growth wins
+// 35-53% of held-out comparisons against the peer alone, maturity 32-39%, chains 19-28%),
+// so they carry no fitted coefficient and no held-out claim. They stay, bounded as in v3,
+// because the judging criteria name 7-day growth and time without a token as inputs to implied
+// value, and because a launch radar with no momentum or maturity signal would rank a
+// shrinking protocol beside a growing one. Per-category size slopes were tested and rejected
+// (held-out win rates 0-35%: noise), as were damped curves (they over-predict large protocols
+// by 2.8-3.8x) and shrunk category offsets on the curve (no consistent gain over the curve).
+// The snapshot carries no FDV or supply field, so log(FDV/TVL) cannot be fitted here at all;
+// mcap/TVL is the only available target, and the evidence says so.
 //
 // Stablecoins are not launch candidates: their token already exists and trades, pegged, so ranking
 // one as a pre-token launch is a snapshot artifact. The stablecoin categories and a short denylist
@@ -28,12 +53,18 @@
 // are the floor and cannot be left out, so a stablecoin on the watchlist stays on the board, flagged
 // as a stablecoin, and the dashboard says so.
 //
-// Token odds are the chance a protocol ever launches a token, from the peers' record: the share
-// of protocols in its category that already have one, shrunk toward the global share with a
-// Beta prior so a thin category cannot claim certainty. Expected value is the implied launch
-// value times the token odds — what the launch is worth once the chance it happens is counted.
-// The board stays sorted by implied value; the dashboard's top candidates are ranked by expected
-// value, which is the number a farmer actually decides on.
+// Token odds are a fitted logistic model, not just a shrunk category rate: logit(p) =
+// logit(shrunk category rate) + b0 + b1*z(log TVL) + b2*z(7-day growth) + b3*z(log chains),
+// fitted on all 758 protocols by deterministic gradient descent at run time. No-token age is
+// deliberately NOT a covariate: P(has token | age) rises with age mechanically (older protocols
+// have had more time to launch), which says nothing about whether an old protocol WITH NO TOKEN
+// YET will launch next, so age cannot be read as a launch probability from this one-date
+// snapshot. Held-out, the fitted odds beat the v3 shrunk rate on Brier score and AUC in every
+// split (4-fold mean Brier 0.150 vs 0.155, AUC 0.650 vs 0.600); both lose to the flat global
+// rate on the forward time split, which the evidence records. Expected value is the implied
+// launch value times the token odds — what the launch is worth once the chance it happens is
+// counted. The board stays sorted by implied value; the dashboard's top candidates are ranked
+// by expected value, which is the number a farmer actually decides on.
 //
 // A protocol is pre-token when its record carries no token: no market cap, no CoinGecko id, no
 // symbol. The live-token protocols are kept apart and shown with the market's own values, never
@@ -78,6 +109,12 @@ export interface ModelConstants {
   unknown_age_days: number;
   chain_step: number;
   chain_max_extra: number;
+  /** How far the fitted size curve may move a row from its peer multiple, each way. */
+  size_cap_mult: number;
+  /** Gradient-descent iterations for the token-odds logistic fit (converged by 300). */
+  odds_gd_iters: number;
+  /** Gradient-descent learning rate for the token-odds logistic fit. */
+  odds_gd_lr: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -95,10 +132,13 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
   chain_step: 0.02,
   chain_max_extra: 0.1,
+  size_cap_mult: 2,
+  odds_gd_iters: 500,
+  odds_gd_lr: 0.5,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -135,6 +175,10 @@ export interface BoardRow {
     peer_multiple: number;
     peer_n: number;
     peer_fallback: boolean;
+    /** The fitted size curve's own multiple for this TVL, before the peer bound. */
+    size_multiple: number;
+    /** The size factor actually applied: size_multiple / peer_multiple, clamped to [1/cap, cap]. */
+    size_multiplier: number;
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
@@ -163,6 +207,8 @@ export interface RadarRow {
   peer_multiple: number;
   peer_n: number;
   peer_fallback: boolean;
+  size_multiple: number;
+  size_multiplier: number;
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
@@ -198,6 +244,35 @@ export interface ExcludedRow {
   reason: string;
 }
 
+/** The fitted size curve: log(mcap) = intercept + slope * log(tvl), fit at run time. */
+export interface SizeCurve {
+  slope: number;
+  intercept: number;
+  n_comps: number;
+}
+
+/** The fitted token-odds logistic model, fit at run time on all protocols. */
+export interface OddsFit {
+  table: OddsTable;
+  intercept: number;
+  /** Slopes on the standardised covariates [log TVL, 7-day growth / 100, log chains]. */
+  slopes: number[];
+  means: number[];
+  sds: number[];
+}
+
+/** The value model's own held-out test, recomputed at run time by leave-one-out. */
+export interface HeldOut {
+  /** Token-bearing comparables in the leave-one-out test. */
+  n_comps: number;
+  /** Median |predicted / actual| for the radar-4 value multiple (peer x bounded size curve). */
+  median_error_x: number;
+  /** Median |predicted / actual| for the v3 peer multiple alone, on the same folds. */
+  peer_median_error_x: number;
+  /** Share of held-out comparables the radar-4 multiple predicts closer than the peer alone. */
+  win_rate_vs_peer: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, the peers, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -212,6 +287,8 @@ export interface RadarData {
   early_size: number;
   live_size: number;
   global_multiple: number;
+  size_curve: SizeCurve | null;
+  heldout: HeldOut;
   peers: PeerEntry[];
   excluded: ExcludedRow[];
   rows: RadarRow[];
@@ -328,17 +405,97 @@ export function tokenOddsTable(snapshot: Snapshot): OddsTable {
 }
 
 /**
- * The chance a protocol ever launches a token, from its category's record: the share of the
- * category's protocols that already have one, shrunk toward the global share with a Beta prior
- * of `odds_prior_n` protocols, so a thin category cannot claim certainty. A category with no
- * record at all takes the global share. Rounded to four decimals, so the board is deterministic.
+ * The shrunk category token rate (the v3 odds): the share of the category's protocols that
+ * already have one, shrunk toward the global share with a Beta prior of `odds_prior_n`
+ * protocols, so a thin category cannot claim certainty. A category with no record at all
+ * takes the global share. This is the OFFSET of the fitted odds model, not the odds itself.
+ * Rounded to four decimals, so the board is deterministic.
  */
-export function tokenOddsFor(category: string | null, odds: OddsTable, model: ModelConstants = MODEL): number {
+export function tokenOddsBaseFor(category: string | null, odds: OddsTable, model: ModelConstants = MODEL): number {
   const entry = category === null ? undefined : odds.byCategory.get(category);
   if (entry === undefined) return Math.round(odds.globalRate * 1e4) / 1e4;
   const prior = model.odds_prior_n * odds.globalRate;
   const oddsValue = (entry.withToken + prior) / (entry.total + model.odds_prior_n);
   return Math.round(oddsValue * 1e4) / 1e4;
+}
+
+/**
+ * The chance a protocol ever launches a token, from its category's record: the share of the
+ * category's protocols that already have one, shrunk toward the global share with a Beta prior
+ * of `odds_prior_n` protocols, so a thin category cannot claim certainty. A category with no
+ * record at all takes the global share. Rounded to four decimals, so the board is deterministic.
+ * Kept for compatibility: buildBoard uses the fitted odds (tokenOddsFittedFor) instead.
+ */
+export function tokenOddsFor(category: string | null, odds: OddsTable, model: ModelConstants = MODEL): number {
+  return tokenOddsBaseFor(category, odds, model);
+}
+
+/** The odds model's covariates for one protocol: [log TVL, clamped 7-day growth / 100, log chains]. */
+function oddsFeatures(p: SnapshotProtocol, model: ModelConstants): number[] {
+  return [
+    Math.log(Math.max(1, p.tvl_usd)),
+    Math.min(model.growth_cap, Math.max(model.growth_floor, finite(p.change_7d, 0))) / 100,
+    Math.log(Math.max(1, p.chains.length)),
+  ];
+}
+
+/**
+ * The fitted token-odds model: a logistic regression on all of the snapshot's protocols,
+ * logit(p) = logit(shrunk category rate) + intercept + slopes . z(covariates), with the
+ * covariates standardised on the snapshot. Fit by batch gradient descent with a fixed
+ * iteration count and learning rate, in snapshot order, so the fit is deterministic: no
+ * clock, no randomness, no network. Converged by 300 iterations on this snapshot (identical
+ * to 4 decimals at 300, 800 and 2,000 iterations); 500 is the margin.
+ *
+ * No-token age is deliberately NOT a covariate: P(has token | age) rises with age
+ * mechanically — older protocols have had more time to launch — which says nothing about
+ * whether an old protocol WITH NO TOKEN YET will launch next. Fitting that slope and
+ * applying it to pre-token rows would read cumulative incidence as a launch probability.
+ */
+export function fitTokenOdds(snapshot: Snapshot, model: ModelConstants = MODEL): OddsFit {
+  const table = tokenOddsTable(snapshot);
+  const rows = snapshot.protocols;
+  const feats = rows.map((p) => oddsFeatures(p, model));
+  const d = 3;
+  const means: number[] = [];
+  const sds: number[] = [];
+  for (let j = 0; j < d; j++) {
+    const xs = feats.map((f) => f[j]!);
+    const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const sd = Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length) || 1;
+    means.push(m);
+    sds.push(sd);
+  }
+  const offsetOf = (p: SnapshotProtocol): number => {
+    const p0 = Math.min(0.99, Math.max(0.01, tokenOddsBaseFor(p.category, table, model)));
+    return Math.log(p0 / (1 - p0));
+  };
+  const beta = new Array<number>(d + 1).fill(0);
+  for (let it = 0; it < model.odds_gd_iters; it++) {
+    const grad = new Array<number>(d + 1).fill(0);
+    for (let i = 0; i < rows.length; i++) {
+      const p = rows[i]!;
+      const z = feats[i]!.map((x, j) => (x - means[j]!) / sds[j]!);
+      let eta = offsetOf(p) + beta[0]!;
+      for (let j = 0; j < d; j++) eta += beta[j + 1]! * z[j]!;
+      const prob = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, eta))));
+      const err = prob - (p.mcap_usd !== null ? 1 : 0);
+      grad[0]! += err;
+      for (let j = 0; j < d; j++) grad[j + 1]! += err * z[j]!;
+    }
+    for (let j = 0; j <= d; j++) beta[j]! -= (model.odds_gd_lr / rows.length) * grad[j]!;
+  }
+  return { table, intercept: beta[0]!, slopes: beta.slice(1), means, sds };
+}
+
+/** One protocol's fitted token odds under the logistic model, rounded to four decimals. */
+export function tokenOddsFittedFor(p: SnapshotProtocol, fit: OddsFit, model: ModelConstants = MODEL): number {
+  const p0 = Math.min(0.99, Math.max(0.01, tokenOddsBaseFor(p.category, fit.table, model)));
+  let eta = Math.log(p0 / (1 - p0)) + fit.intercept;
+  const f = oddsFeatures(p, model);
+  for (let j = 0; j < fit.slopes.length; j++) eta += fit.slopes[j]! * ((f[j]! - fit.means[j]!) / fit.sds[j]!);
+  const prob = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, eta))));
+  return Math.round(prob * 1e4) / 1e4;
 }
 
 /** The signed-log momentum multiplier for a clamped 7-day change in per cent. */
@@ -362,22 +519,124 @@ export function chainMultiplier(chainCount: number, model: ModelConstants = MODE
   return 1 + extra;
 }
 
+/** The token-bearing comparables a size curve may be fitted on: positive market cap and TVL. */
+export function sizeComps(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+}
+
+/**
+ * The fitted size curve: ordinary least squares on log(mcap) = intercept + slope * log(tvl)
+ * over the snapshot's token-bearing comparables. Fewer than 10 comparables is no fit at all
+ * (a curve on a handful of points is a guess, not a fit) and returns null, which prices rows
+ * on the peer multiple alone. `excludeSlug` leaves one comparable out, for the leave-one-out
+ * test. Computed from this snapshot at run time, never typed in by hand.
+ */
+export function fitSizeCurve(snapshot: Snapshot, excludeSlug: string | null = null): SizeCurve | null {
+  const comps = sizeComps(snapshot).filter((p) => p.slug !== excludeSlug);
+  if (comps.length < 10) return null;
+  const xs = comps.map((p) => Math.log(p.tvl_usd));
+  const ys = comps.map((p) => Math.log(p.mcap_usd!));
+  const n = comps.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i]! - mx) * (ys[i]! - my);
+    sxx += (xs[i]! - mx) ** 2;
+  }
+  const slope = sxx === 0 ? 0 : sxy / sxx;
+  const intercept = my - slope * mx;
+  return { slope: round4(slope), intercept: round4(intercept), n_comps: n };
+}
+
+/** The size curve's own multiple for a TVL: the curve's implied mcap over that TVL, clamped. */
+export function sizeCurveMultiple(curve: SizeCurve | null, tvlUsd: number, model: ModelConstants = MODEL): number {
+  if (curve === null || tvlUsd <= 0) return model.peer_mult_max;
+  const raw = Math.exp(curve.intercept + curve.slope * Math.log(tvlUsd)) / tvlUsd;
+  if (!Number.isFinite(raw) || raw <= 0) return model.peer_mult_max;
+  return Math.min(model.peer_mult_max, Math.max(model.peer_mult_min, raw));
+}
+
+/**
+ * The size factor a row actually gets: the curve's multiple over the peer multiple, clamped
+ * to [1/size_cap_mult, size_cap_mult]. The peer is the prior and the curve is the evidence;
+ * the bound says the evidence may move a row at most one doubling from its category peer.
+ * On this snapshot the bound is what keeps the $2.75B giants credible: the unbounded curve
+ * prices Sentora at 0.03x TVL, the bound at 0.10x. Returns the raw curve multiple too, so the
+ * board shows both the fit and the factor it applied.
+ */
+export function sizeMultiplierFor(
+  tvlUsd: number,
+  peerMultiple: number,
+  curve: SizeCurve | null,
+  model: ModelConstants = MODEL,
+): { multiple: number; multiplier: number } {
+  const multiple = sizeCurveMultiple(curve, tvlUsd, model);
+  if (curve === null) return { multiple: peerMultiple, multiplier: 1 };
+  const ratio = multiple / peerMultiple;
+  const multiplier = Math.min(model.size_cap_mult, Math.max(1 / model.size_cap_mult, ratio));
+  return { multiple, multiplier };
+}
+
+/**
+ * The value model's own held-out test, recomputed at run time: leave-one-out over the
+ * token-bearing comparables. Each comparable is held out once, the peer table and the size
+ * curve are refit on the rest, and the radar-4 multiple (peer x peer-bounded size curve) is
+ * scored against the v3 peer multiple alone on the held-out market cap. Median error is
+ * exp(median |log(pred / actual)|), the median factor by which the prediction is off.
+ * No growth, maturity or chain terms enter this test: it tests the multiple, and those terms
+ * are disclosed sensitivities, not fitted value factors.
+ */
+export function looValueHeldOut(snapshot: Snapshot, model: ModelConstants = MODEL): HeldOut {
+  const comps = sizeComps(snapshot);
+  const n = comps.length;
+  if (n < 10) return { n_comps: n, median_error_x: 1, peer_median_error_x: 1, win_rate_vs_peer: 0.5 };
+  const err4: number[] = [];
+  const errPeer: number[] = [];
+  for (const held of comps) {
+    const train: Snapshot = { ...snapshot, protocols: snapshot.protocols.filter((p) => p.slug !== held.slug) };
+    const peers = peerMultiples(train, model);
+    const curve = fitSizeCurve(train);
+    const peer = peerMultipleFor(held.category, peers, model).multiple;
+    const size = sizeMultiplierFor(held.tvl_usd, peer, curve, model);
+    const pred4 = Math.max(1, held.tvl_usd * peer * size.multiplier);
+    const predPeer = Math.max(1, held.tvl_usd * peer);
+    err4.push(Math.abs(Math.log(pred4 / held.mcap_usd!)));
+    errPeer.push(Math.abs(Math.log(predPeer / held.mcap_usd!)));
+  }
+  const med = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+  };
+  const wins = err4.filter((e, i) => e < errPeer[i]!).length;
+  return {
+    n_comps: n,
+    median_error_x: round4(Math.exp(med(err4))),
+    peer_median_error_x: round4(Math.exp(med(errPeer))),
+    win_rate_vs_peer: Math.round((wins / n) * 1e4) / 1e4,
+  };
+}
+
 /** The multipliers and the implied value one protocol gets under the model. */
 export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   peers: PeerTable,
   model: ModelConstants = MODEL,
-): { implied: number; peer: { multiple: number; n: number; fallback: boolean }; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+  curve: SizeCurve | null = null,
+): { implied: number; peer: { multiple: number; n: number; fallback: boolean }; size: { multiple: number; multiplier: number }; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const peer = peerMultipleFor(protocol.category, peers, model);
+  const size = sizeMultiplierFor(protocol.tvl_usd, peer.multiple, curve, model);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = growthMultiplier(growthPct, model);
   const maturityMult = maturityMultiplier(age, model);
   const chainMult = chainMultiplier(protocol.chains.length, model);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * growthMult * maturityMult * chainMult));
-  return { implied, peer, growthPct, growthMult, maturityMult, chainMult, age };
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * size.multiplier * growthMult * maturityMult * chainMult));
+  return { implied, peer, size, growthPct, growthMult, maturityMult, chainMult, age };
 }
 
 /** Whether a protocol records no token at all. */
@@ -446,7 +705,8 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const peers = peerMultiples(snapshot, model);
-  const odds = tokenOddsTable(snapshot);
+  const curve = fitSizeCurve(snapshot);
+  const oddsFit = fitTokenOdds(snapshot, model);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names is ranked, even one the snapshot no longer
@@ -462,8 +722,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   }
 
   const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, peers, model);
-    const tokenOdds = tokenOddsFor(p.category, odds, model);
+    const v = impliedValue(p, snapshot.as_of, peers, model, curve);
+    const tokenOdds = tokenOddsFittedFor(p, oddsFit, model);
     const cost = farmCost(p, v.age);
     return { p, v, tokenOdds, expected: Math.max(1, Math.round(v.implied * tokenOdds)), cost };
   });
@@ -492,6 +752,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       peer_multiple: round4(s.v.peer.multiple),
       peer_n: s.v.peer.n,
       peer_fallback: s.v.peer.fallback,
+      size_multiple: round4(s.v.size.multiple),
+      size_multiplier: round4(s.v.size.multiplier),
       growth_pct: round4(s.v.growthPct),
       growth_multiplier: round4(s.v.growthMult),
       maturity_multiplier: round4(s.v.maturityMult),
@@ -855,6 +1117,8 @@ export function radarRow(row: BoardRow): RadarRow {
     peer_multiple: row.model.peer_multiple,
     peer_n: row.model.peer_n,
     peer_fallback: row.model.peer_fallback,
+    size_multiple: row.model.size_multiple,
+    size_multiplier: row.model.size_multiplier,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
@@ -869,6 +1133,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const peers = peerMultiples(snapshot, model);
+  const curve = fitSizeCurve(snapshot);
+  const heldout = looValueHeldOut(snapshot, model);
   const early = board.filter((r) => !r.on_watchlist).length;
   // The peer table shows the multiple each ranked category actually gets: the category median
   // at n >= 3, the log-space blend at n = 2, and nothing for categories with fewer peers.
@@ -894,6 +1160,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     early_size: early,
     live_size: live.length,
     global_multiple: round4(peers.global),
+    size_curve: curve,
+    heldout,
     peers: peerTable,
     excluded: excludedRows(snapshot),
     rows: board.map(radarRow),

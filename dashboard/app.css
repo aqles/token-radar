@@ -41,6 +41,11 @@ main { max-width: 1180px; margin: 0 auto; padding: 0 28px 40px; }
 section { margin-top: 28px; }
 h2 { font-size: 19px; margin: 0 0 10px; }
 .note { color: var(--muted); font-size: 13.5px; }
+.evidence { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; font-size: 14px; max-width: 900px; }
+.evidence b { color: var(--accent); }
+.evtable { font-size: 13.5px; max-width: 900px; margin-top: 12px; }
+.evtable th, .evtable td { white-space: normal; vertical-align: top; }
+.evtable td b { color: var(--accent); }
 .method p { max-width: 900px; }
 .method .peer { display: inline-block; margin: 4px 8px 4px 0; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; }
 .method .peer b { color: var(--accent); font-weight: 700; }
