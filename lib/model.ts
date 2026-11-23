@@ -1,18 +1,43 @@
-// Token launch radar, model radar-5: fitted size curve + category peer prior + fitted odds.
+// Token launch radar, model radar-6: fitted size curve + category peer prior + fitted odds.
 //
-// radar-5 is an ADDITIVE round on the radar-4.1 model: the fitted curve, the peer rule, the
-// [0.5x, 2x] clamp, the odds fit, the board values, the rank order and the farm steps are all
-// UNCHANGED (0 diffs across all 194 rows vs the v4.1 baseline — see
-// scratch/v5-model-evidence.md). What radar-5 adds, all computed from the snapshot at run time:
-// (a) a listing-date cohort check (RadarData.cohort_check): the cap2 model fitted on protocols
-// listed before 2023 / 2024 / 2025 and tested on those listed after, plus two rolling-origin
-// variants — a cohort split, NOT a historical backtest, because every protocol is scored on its
-// 2026-11-14 TVL and market cap; (b) a true 758/758 ledger (RadarData.ledger): 194 ranked +
-// 148 pre-token excluded with a reason each + 416 with a token, which replaces the old footer
-// strip's false arithmetic (144 + 194 + 148 = 486); (c) a computed farm verdict per row
-// (FARM / THIN / SKIP) from a solved break-even deposit, plus dated farm timelines.
-// The clamp stays 2x: relaxing it was tested and rejected in v5 (it buys 0.18x of LOO and moves
-// the top-2 multiples below 0.08x — a credibility judgement, not a model improvement).
+// radar-6 is a MODEL round on the radar-5 package: the fitted curve, the peer rule, the
+// [0.5x, 2x] clamp, the odds fit, the board membership, the ledger, the cohort check and
+// the farm steps are all UNCHANGED. What radar-6 changes, all computed from the snapshot
+// at run time (see scratch/v6-model-evidence.md for the numbers behind each decision):
+// (a) the value model DROPS the growth / maturity / chains sensitivities: on held-out
+// comparables the full formula scores median error 4.2025x (all comps) / 4.0974x
+// (rankable-like) against 3.9599x / 3.9663x for the peer x bounded-size-curve multiple
+// alone, and wins 0.6484 / 0.6552 vs 0.6719 / 0.6782 — the terms do not earn their
+// place, so implied = TVL x peer x size multiplier and the three multipliers ship as
+// 1.00 (retained as fields so the dashboard's re-derivation and model cells stay valid;
+// the dashboard must present them as dropped, not as live signals). Dropping them also
+// aligns the board with its advertised held-out number: the LOO test always scored the
+// multiple alone, while the v5 board was priced with the terms (4.20x held-out).
+// (b) the farm verdict is computed AT A SIZED DEPOSIT: S = min(2 x D*, 10 x plan
+// deposit), twice the break-even deposit capped at ten times the TVL-tiered plan
+// deposit, so S <= $2,500. FARM if S reaches 2 x D* within the cap, THIN if S is
+// capped but net at S is still positive, SKIP if net at S is <= 0 or odds < 0.01.
+// On this snapshot: 70 FARM / 61 THIN / 63 SKIP. The rule alone, on the v5 board,
+// would have given 49/47/98 with the SKIP set identical to v5's; the radar-6 counts
+// differ because the term drop (a) raised implied values and EV, so D* fell and 35
+// v5 SKIP rows moved up to THIN/FARM — all 7 v5 FARM rows stay FARM, and every FARM
+// row has positive expected net at its sized deposit by construction (exactly one gas
+// bill, median +$17.02). Expected net at the PLAN deposit is negative on 193 of 194
+// rows — one row, anemoy-capital (#78), breaks even at its plan deposit (+$4.83)
+// after the term drop nearly doubled its implied value (its v5 terms were 0.53x
+// combined). That finding is kept in the data, not hidden. Sentora (#1) stays SKIP.
+// (c) the token-odds age term was TESTED and REJECTED (see evidence §3): an age +
+// undated-indicator model wins 10-fold (Brier 0.1438 / AUC 0.675 vs adopted 0.1489 /
+// 0.650) and wins every forward window in aggregate, but by test-row age bucket it
+// LOSES on old rows (+0.0415 Brier on >1095d rows in the 2023 forward split, the only
+// forward window with old test rows) while winning on very young rows (-0.043 on
+// <180d). The board is old no-token survivors, so the term does not earn its place
+// there; the positive age slope is exposure time (cumulative incidence), not launch
+// hazard, exactly as the radar-5 rationale held. The odds model is UNCHANGED.
+// (d) interval constructions were tested again and the value-band question stays
+// CLOSED (see evidence §5): the best honest band at >=75% coverage is still 100x+
+// wide; rank ranges widened to P5-P95 / P2.5-P97.5 still cover far below 75%.
+// The clamp stays 2x. The category screen stays. No walk-forward claim is made.
 //
 // Break-even deposit (per row, see farmBreakEvenDeposit): a farmer depositing D into a protocol
 // with TVL T holds D/T of the protocol's TVL. If the launch's expected value EV (implied x
@@ -22,15 +47,23 @@
 // real airdrop pool is a fraction of token supply — so D* is a LOWER bound on the true
 // break-even deposit, and the verdicts built on it are optimistic, not conservative. The
 // rejected alternative (EV scaling with deposit from the plan deposit, D* = capital * gas / EV)
-// is degenerate: EV >> gas on every row, so D* would be pennies on all 194 rows. Verdict rule
-// (see farmVerdictFor): FARM if D* <= 2x the plan deposit, THIN if 2x < D* <= 10x, SKIP if
-// D* > 10x or token odds < 0.01. On this snapshot that gives 7 FARM / 89 THIN / 98 SKIP — and
-// expected net at the plan deposit is negative on ALL 194 rows (best -$4.90), so no row is
-// FARM at its plan deposit as written; FARM means the break-even deposit is within doubling
-// distance of the plan deposit. The verdict is a per-dollar efficiency statement, not a value
-// ranking: the biggest rows (Sentora, Steakhouse) are SKIP because their EV per TVL dollar is
-// small, while small high-odds rows are FARM. Capital is TVL-tiered ($250/$150/$100/$50),
-// never flat; hold days are age-tiered (60/45/30); timelines start at the snapshot date.
+// is degenerate: EV >> gas on every row, so D* would be pennies on all 194 rows. Since radar-6
+// the verdict is computed AT A SIZED DEPOSIT (see farmSizedDeposit / farmVerdictFor):
+// S = min(2 x D*, 10 x plan deposit) — twice the break-even deposit, capped at ten times the
+// TVL-tiered plan deposit, so S <= $2,500. FARM if S reaches 2 x D* within the cap
+// (D* <= 5 x plan): expected net at S is then exactly one gas bill by construction, positive
+// on every FARM row. THIN if S is capped at 10 x plan but net at S is still positive. SKIP if
+// net at S is <= 0 (D* > 10 x plan) or token odds < 0.01. On this snapshot that gives 70 FARM /
+// 61 THIN / 63 SKIP (v5, judged at the plan deposit, gave 7/89/98). The rule alone, applied to
+// the v5 board, would have given 49/47/98 with the SKIP set identical to v5's; the radar-6
+// counts differ because the term drop raised implied values and EV, so D* fell on most rows.
+// Expected net at the PLAN deposit is negative on 193 of 194 rows — one row,
+// anemoy-capital (#78), breaks even at its plan deposit (+$4.83) after the term drop nearly
+// doubled its implied value (its v5 terms were 0.53x combined). The verdict is a
+// per-dollar efficiency statement, not a value ranking: the biggest rows (Sentora, Steakhouse)
+// are SKIP because their EV per TVL dollar is small, while small high-odds rows are FARM.
+// Capital is TVL-tiered ($250/$150/$100/$50), never flat; hold days are age-tiered (60/45/30);
+// timelines start at the snapshot date.
 //
 // Rank ranges are a STABILITY statement, not a prediction interval: each row's rank is
 // recomputed under 200 bootstrap refits of the size curve and the peer table (the 128
@@ -79,19 +112,27 @@
 //   maturity = 0.7 + 0.3 * min(age_days, 1095) / 1095 (age unknown: 365 days); age saturates,
 //              so being old alone never carries a row
 //   chains   = 1 + 0.02 * min(chains - 1, 5), capped at +10%
-//   implied  = max(1, round(tvl_usd * peer * sizeMult * growthMult * maturity * chains))
+//   implied  = max(1, round(tvl_usd * peer * sizeMult))
 //
-// Growth, maturity and chains are DISCLOSED SENSITIVITIES, not fitted value factors: on the
-// traded comparables they do not improve the held-out prediction of market cap (growth wins
-// 35-53% of held-out comparisons against the peer alone, maturity 32-39%, chains 19-28%),
-// so they carry no fitted coefficient and no held-out claim. They stay, bounded as in v3,
-// because the judging criteria name 7-day growth and time without a token as inputs to implied
-// value, and because a launch radar with no momentum or maturity signal would rank a
-// shrinking protocol beside a growing one. Per-category size slopes were tested and rejected
-// (held-out win rates 0-35%: noise), as were damped curves (they over-predict large protocols
-// by 2.8-3.8x) and shrunk category offsets on the curve (no consistent gain over the curve).
-// The snapshot carries no FDV or supply field, so log(FDV/TVL) cannot be fitted here at all;
-// mcap/TVL is the only available target, and the evidence says so.
+// Growth, maturity and chains were DISCLOSED SENSITIVITIES through radar-5, not fitted
+// value factors: on the traded comparables they did not improve the held-out prediction
+// of market cap (growth wins 35-53% of held-out comparisons against the peer alone,
+// maturity 32-39%, chains 19-28%), so they carried no fitted coefficient and no
+// held-out claim. In radar-6 they are DROPPED from the value altogether: the full
+// formula (peer x bounded size curve x growth x maturity x chains) scores median error
+// 4.2025x on held-out comparables against 3.9599x for the multiple alone (4.0974x vs
+// 3.9663x on rankable-like comps), and wins 0.6484 vs 0.6719 (0.6552 vs 0.6782) — the
+// terms actively hurt held-out prediction, so the simpler model is adopted (see
+// scratch/v6-model-evidence.md §4). The multipliers still ship as 1.00 on every row so
+// the dashboard's re-derivation (TVL x peer x size x growth x maturity x chains) keeps
+// working; the dashboard must present them as dropped, not as live signals. The 7-day
+// change itself is still carried on the row (growth_pct) as data, and the odds model
+// still uses the 7-day change as a covariate. Per-category size slopes were tested and
+// rejected (held-out win rates 0-35%: noise), as were damped curves (they over-predict
+// large protocols by 2.8-3.8x) and shrunk category offsets on the curve (no consistent
+// gain over the curve). The snapshot carries no FDV or supply field, so log(FDV/TVL)
+// cannot be fitted here at all; mcap/TVL is the only available target, and the
+// evidence says so.
 //
 // Stablecoins are not launch candidates: their token already exists and trades, pegged, so ranking
 // one as a pre-token launch is a snapshot artifact. The stablecoin categories and a short denylist
@@ -190,7 +231,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -203,9 +244,12 @@ export interface FarmStep {
 }
 
 /**
- * The computed farm verdict for one row (see farmVerdictFor). FARM: the solved break-even
- * deposit is within twice the plan deposit. THIN: it needs up to 10x the plan deposit.
- * SKIP: it needs more than 10x the plan deposit, or the token odds are below 1%.
+ * The computed farm verdict for one row (see farmVerdictFor). FARM: the sized deposit
+ * reaches twice the break-even deposit within the cap, so expected net at the sized
+ * deposit is exactly one gas bill by construction. THIN: the sized deposit is capped
+ * at 10x the plan deposit but net at the sized deposit is still positive. SKIP: net at
+ * the sized deposit is <= 0 (break-even exceeds 10x the plan deposit), or the token
+ * odds are below 1%.
  */
 export type FarmVerdict = 'FARM' | 'THIN' | 'SKIP';
 
@@ -311,7 +355,9 @@ export interface FarmMethod {
   formula: string;
   /** The assumption the formula rests on, and its direction (optimistic lower bound). */
   assumption: string;
-  /** The verdict thresholds, in words. */
+  /** The sized-deposit rule, in words: twice break-even, capped at 10x the plan deposit. */
+  sized_deposit_rule: string;
+  /** The verdict thresholds, in words (verdicts are computed at the sized deposit). */
   thresholds: string;
   /** Verdict counts across the 194 board rows. */
   counts: { farm: number; thin: number; skip: number };
@@ -319,7 +365,13 @@ export interface FarmMethod {
   net_at_plan_usd: { min: number; median: number; max: number };
   /** Rows whose expected net at the plan deposit is >= 0 (zero on this snapshot). */
   net_non_negative_rows: number;
-  /** The headline the dashboard may quote: no row breaks even at its plan deposit as written. */
+  /** Expected net at the sized deposit across the board (min / median / max, dollars). */
+  net_at_sized_usd: { min: number; median: number; max: number };
+  /** Rows whose expected net at the sized deposit is > 0 (FARM + THIN). */
+  sized_positive_net_rows: number;
+  /** Median sized deposit across the board, in whole dollars. */
+  median_sized_deposit_usd: number;
+  /** The headline the dashboard may quote: verdicts at the sized deposit, and the plan-deposit finding kept alongside. */
   note: string;
 }
 
@@ -345,10 +397,14 @@ export interface BoardRow {
   farm_gas_usd: number;
   /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV (see farmBreakEvenDeposit). */
   farm_break_even_usd: number;
-  /** The computed farm verdict: FARM / THIN / SKIP (see farmVerdictFor). */
+  /** The computed farm verdict: FARM / THIN / SKIP, at the sized deposit (see farmVerdictFor). */
   farm_verdict: FarmVerdict;
-  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (negative on all 194 rows). */
+  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (negative on 193 of 194 rows). */
   farm_net_at_plan_usd: number;
+  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit) (see farmSizedDeposit). */
+  farm_sized_deposit_usd: number;
+  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars (positive on every FARM row by construction). */
+  farm_net_at_sized_usd: number;
   /** The farm timeline starts at the snapshot date: the board's "today". */
   farm_start_date: string;
   /** Start date + the age-tiered hold days. */
@@ -399,10 +455,14 @@ export interface RadarRow {
   farm_gas_usd: number;
   /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV. */
   farm_break_even_usd: number;
-  /** The computed farm verdict: FARM / THIN / SKIP. */
+  /** The computed farm verdict: FARM / THIN / SKIP, at the sized deposit. */
   farm_verdict: FarmVerdict;
   /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars. */
   farm_net_at_plan_usd: number;
+  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit). */
+  farm_sized_deposit_usd: number;
+  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars. */
+  farm_net_at_sized_usd: number;
   /** The farm timeline starts at the snapshot date. */
   farm_start_date: string;
   /** Start date + the age-tiered hold days. */
@@ -519,11 +579,11 @@ export interface OddsFitData {
 export interface HeldOut {
   /** Token-bearing comparables in the leave-one-out test. */
   n_comps: number;
-  /** Median |predicted / actual| for the radar-5 value multiple (peer x bounded size curve). */
+  /** Median |predicted / actual| for the radar-6 value multiple (peer x bounded size curve). */
   median_error_x: number;
   /** Median |predicted / actual| for the v3 peer multiple alone, on the same folds. */
   peer_median_error_x: number;
-  /** Share of held-out comparables the radar-5 multiple predicts closer than the peer alone. */
+  /** Share of held-out comparables the radar-6 multiple predicts closer than the peer alone. */
   win_rate_vs_peer: number;
 }
 
@@ -749,6 +809,17 @@ function oddsFeatures(p: SnapshotProtocol, model: ModelConstants): number[] {
  * mechanically — older protocols have had more time to launch — which says nothing about
  * whether an old protocol WITH NO TOKEN YET will launch next. Fitting that slope and
  * applying it to pre-token rows would read cumulative incidence as a launch probability.
+ * Radar-6 TESTED this again, three ways (log-age; age buckets; log-age + an undated
+ * indicator, which fixes the contamination from the 113 undated protocols all imputed
+ * to age 365): the age + indicator model wins 10-fold (Brier 0.1438 / AUC 0.675 vs the
+ * adopted 0.1489 / 0.650) and wins every forward window in aggregate — but by test-row
+ * age bucket it LOSES on old rows (+0.0415 Brier on >1095d rows in the 2023 forward
+ * split, the only forward window with old test rows) while winning on very young rows
+ * (-0.043 on <180d). The board is old no-token survivors, so the term does not earn its
+ * place there; the exclusion stands, with the numbers in scratch/v6-model-evidence.md
+ * §3. Held-out, the fitted odds beat the v3 shrunk rate on Brier score and AUC in every
+ * split (10-fold mean Brier 0.149 vs 0.152, AUC 0.650 vs 0.613); both lose to the flat
+ * global rate on the forward time split, which the evidence records.
  */
 export function fitTokenOdds(snapshot: Snapshot, model: ModelConstants = MODEL): OddsFit {
   const table = tokenOddsTable(snapshot);
@@ -889,7 +960,7 @@ export function sizeMultiplierFor(
 /**
  * The value model's own held-out test, recomputed at run time: leave-one-out over the
  * token-bearing comparables. Each comparable is held out once, the peer table and the size
- * curve are refit on the rest, and the radar-5 multiple (peer x peer-bounded size curve) is
+ * curve are refit on the rest, and the radar-6 multiple (peer x peer-bounded size curve) is
  * scored against the v3 peer multiple alone on the held-out market cap. Median error is
  * exp(median |log(pred / actual)|), the median factor by which the prediction is off.
  * No growth, maturity or chain terms enter this test: it tests the multiple, and those terms
@@ -1052,7 +1123,8 @@ export interface RankRange {
  * medians of the resampled comps) and the size curve (OLS on the resampled comps) are
  * refit, and every board row is re-priced under the refit — peer x peer-bounded size
  * curve with the [0.5x, 2x] clamp — with its growth, maturity and chain terms held at
- * their full-fit values, then re-ranked (ties by slug, as on the board). The row's range
+ * 1.00 (radar-6 dropped the terms from the value; the inputs still ride along so the
+ * call shape is unchanged), then re-ranked (ties by slug, as on the board). The row's range
  * is the P10-P90 of its rank across refits, plus the median. This is a REAL computed
  * range, not a cosmetic ±: a row whose rank moves when the fit wobbles shows a wide
  * range, a row pinned by its own TVL and category shows a narrow one. It is a stability
@@ -1101,7 +1173,7 @@ export function rankRangeMethod(model: ModelConstants = MODEL): RankRangeMethod 
     seed: model.rank_range_seed,
     resampled: 'size comps with replacement (n=128)',
     refit: 'size curve OLS + peer medians per refit',
-    fixed_terms: 'growth/maturity/chains from full fit',
+    fixed_terms: 'growth/maturity/chains at 1.00 (radar-6 dropped the terms from the value)',
     clamp: '[0.5x, 2x] peer',
     quantiles: 'P10/P90/median of rank across refits',
   };
@@ -1143,10 +1215,15 @@ export function impliedValue(
   const size = sizeMultiplierFor(protocol.tvl_usd, peer.multiple, curve, model);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = growthMultiplier(growthPct, model);
-  const maturityMult = maturityMultiplier(age, model);
-  const chainMult = chainMultiplier(protocol.chains.length, model);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * size.multiplier * growthMult * maturityMult * chainMult));
+  // Radar-6: the growth / maturity / chain sensitivities are DROPPED from the value
+  // (they hurt held-out prediction: full formula 4.2025x vs multiple alone 3.9599x on
+  // all comps — see the header comment and scratch/v6-model-evidence.md §4). The
+  // multipliers ship as 1 so the dashboard's re-derivation keeps working; the row
+  // still carries the raw 7-day change (growthPct) as data.
+  const growthMult = 1;
+  const maturityMult = 1;
+  const chainMult = 1;
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * size.multiplier));
   return { implied, peer, size, growthPct, growthMult, maturityMult, chainMult, age };
 }
 
@@ -1240,10 +1317,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const expected = Math.max(1, Math.round(v.implied * tokenOdds));
     // Farm economics (additive: nothing above this line moves any priced value).
     const breakEven = farmBreakEvenDeposit(p.tvl_usd, expected, cost.gas);
-    const verdict = farmVerdictFor(breakEven, cost.capital, tokenOdds);
+    const sized = farmSizedDeposit(breakEven, cost.capital);
+    const netAtSized = farmNetAtSized(sized, p.tvl_usd, expected, cost.gas);
+    const verdict = farmVerdictFor(sized, breakEven, cost.capital, netAtSized, tokenOdds);
     const netAtPlan = farmNetAtPlan(cost.capital, p.tvl_usd, expected, cost.gas);
     const timeline = farmTimeline(snapshot.as_of, v.age);
-    return { p, v, tokenOdds, oddsBase, expected, cost, breakEven, verdict, netAtPlan, timeline };
+    return { p, v, tokenOdds, oddsBase, expected, cost, breakEven, sized, netAtSized, verdict, netAtPlan, timeline };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const rankRanges = bootstrapRankRanges(snapshot, scored.map((s) => ({
@@ -1278,6 +1357,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     farm_break_even_usd: s.breakEven,
     farm_verdict: s.verdict,
     farm_net_at_plan_usd: s.netAtPlan,
+    farm_sized_deposit_usd: s.sized,
+    farm_net_at_sized_usd: s.netAtSized,
     farm_start_date: s.timeline.start_date,
     farm_end_date: s.timeline.end_date,
     farm_hold_days: s.timeline.hold_days,
@@ -1412,21 +1493,57 @@ export function farmBreakEvenDeposit(tvlUsd: number, expectedValueUsd: number, g
 }
 
 /**
- * The computed farm verdict from the solved break-even deposit D*, the plan deposit
- * (capital, TVL-tiered $50/$100/$150/$250) and the token odds:
- *   FARM  D* <= 2x capital: break-even within twice the plan deposit.
- *   THIN  2x capital < D* <= 10x capital: break-even needs up to 10x the plan deposit.
- *   SKIP  D* > 10x capital, or token odds < 0.01 (a sub-1% launch is a lottery ticket,
- *         not a farm — on this snapshot all 5 sub-1% rows already exceed 10x, so the
- *         odds clause binds on no additional row; it is a guard, not a driver).
+ * The sized deposit, in whole dollars: S = min(2 x D*, 10 x plan deposit).
+ *
+ * The verdicts are computed AT this deposit, not at a fixed deposit that loses
+ * everywhere: depositing twice the break-even deposit is the smallest round multiple
+ * of D* at which expected net is positive by construction (net = 2 x gas - gas = gas),
+ * and the cap at ten times the plan deposit keeps the sized deposit inside the same
+ * sane envelope the radar-5 verdicts already used as their SKIP threshold (the plan
+ * deposit is TVL-tiered $50/$100/$150/$250, so S <= $2,500 on every row). The multiple
+ * 2 and the cap 10x are the rule's two stated parameters — no per-row tuning: every
+ * row's sized deposit comes out of this one formula. Sensitivity (see
+ * scratch/v6-model-evidence.md §2): m=1.5/cap 10x gives 67/29/98, m=3/cap 10x gives
+ * 21/75/98 — the SKIP count is 98 under every multiple, because SKIP means
+ * D* > 10 x plan, which no multiple touches.
+ */
+export function farmSizedDeposit(breakEvenUsd: number, capitalUsd: number): number {
+  if (breakEvenUsd <= 0 || capitalUsd <= 0) return 1;
+  return Math.max(1, Math.round(Math.min(2 * breakEvenUsd, 10 * capitalUsd)));
+}
+
+/** Expected net at the sized deposit: S * EV / TVL - gas, in dollars, to cents. */
+export function farmNetAtSized(sizedUsd: number, tvlUsd: number, expectedValueUsd: number, gasUsd: number): number {
+  if (tvlUsd <= 0) return -gasUsd;
+  return Math.round(((sizedUsd * expectedValueUsd) / tvlUsd - gasUsd) * 100) / 100;
+}
+
+/**
+ * The computed farm verdict from the sized deposit S, the solved break-even deposit D*,
+ * the plan deposit (capital, TVL-tiered $50/$100/$150/$250), the expected net at the
+ * sized deposit, and the token odds:
+ *   FARM  S reaches 2 x D* within the cap (2 x D* <= 10 x capital, i.e. D* <= 5 x
+ *         capital): the deposit is twice break-even, so expected net at S is exactly
+ *         one gas bill — positive by construction, on every FARM row.
+ *   THIN  S is capped at 10 x capital but net at S is still positive (5 x capital <
+ *         D* <= 10 x capital): the farmer cannot reach twice break-even within the
+ *         cap, and the margin at the capped deposit is thinner than one gas bill.
+ *   SKIP  net at S <= 0 (D* > 10 x capital: even ten times the plan deposit does not
+ *         break even), or token odds < 0.01 (a sub-1% launch is a lottery ticket, not
+ *         a farm — on this snapshot all 5 sub-1% rows already exceed 10x, so the odds
+ *         clause binds on no additional row; it is a guard, not a driver).
  * The verdict is a per-dollar efficiency statement, not a value ranking: the biggest rows
  * are SKIP because their EV per TVL dollar is small, while small high-odds rows are FARM.
- * On this snapshot: 7 FARM / 89 THIN / 98 SKIP, and expected net at the plan deposit is
- * negative on all 194 rows — so no row is FARM at its plan deposit as written.
+ * On this snapshot: 70 FARM / 61 THIN / 63 SKIP (radar-5, judged at the plan deposit,
+ * gave 7/89/98). The rule alone, applied to the v5 board, would have given 49/47/98
+ * with the SKIP set identical to v5's; the radar-6 counts differ because the term drop
+ * raised implied values and EV, so D* fell on most rows. Expected net at the plan
+ * deposit is negative on 193 of 194 rows — one row, anemoy-capital (#78), breaks even
+ * at its plan deposit (+$4.83) after the term drop nearly doubled its implied value.
  */
-export function farmVerdictFor(breakEvenUsd: number, capitalUsd: number, tokenOdds: number): FarmVerdict {
-  if (tokenOdds < 0.01 || breakEvenUsd > 10 * capitalUsd) return 'SKIP';
-  if (breakEvenUsd <= 2 * capitalUsd) return 'FARM';
+export function farmVerdictFor(sizedUsd: number, breakEvenUsd: number, capitalUsd: number, netAtSizedUsd: number, tokenOdds: number): FarmVerdict {
+  if (tokenOdds < 0.01 || netAtSizedUsd <= 0) return 'SKIP';
+  if (2 * breakEvenUsd <= 10 * capitalUsd) return 'FARM';
   return 'THIN';
 }
 
@@ -1714,6 +1831,8 @@ export function radarRow(row: BoardRow): RadarRow {
     farm_break_even_usd: row.farm_break_even_usd,
     farm_verdict: row.farm_verdict,
     farm_net_at_plan_usd: row.farm_net_at_plan_usd,
+    farm_sized_deposit_usd: row.farm_sized_deposit_usd,
+    farm_net_at_sized_usd: row.farm_net_at_sized_usd,
     farm_start_date: row.farm_start_date,
     farm_end_date: row.farm_end_date,
     farm_hold_days: row.farm_hold_days,
@@ -1831,14 +1950,36 @@ export function buildFarmMethod(board: BoardRow[]): FarmMethod {
   const mid = Math.floor(nets.length / 2);
   const medianNet = nets.length % 2 === 1 ? nets[mid]! : (nets[mid - 1]! + nets[mid]!) / 2;
   const nonNegative = board.filter((r) => r.farm_net_at_plan_usd >= 0).length;
+  const netsSized = board.map((r) => r.farm_net_at_sized_usd).sort((a, b) => a - b);
+  const midS = Math.floor(netsSized.length / 2);
+  const medianNetSized = netsSized.length % 2 === 1 ? netsSized[midS]! : (netsSized[midS - 1]! + netsSized[midS]!) / 2;
+  const positiveSized = board.filter((r) => r.farm_net_at_sized_usd > 0).length;
+  const sizedDeposits = board.map((r) => r.farm_sized_deposit_usd).sort((a, b) => a - b);
+  const midD = Math.floor(sizedDeposits.length / 2);
+  const medianSized = sizedDeposits.length % 2 === 1 ? sizedDeposits[midD]! : (sizedDeposits[midD - 1]! + sizedDeposits[midD]!) / 2;
+  const farmNets = board.filter((r) => r.farm_verdict === 'FARM').map((r) => r.farm_net_at_sized_usd).sort((a, b) => a - b);
+  const farmMedianNet = farmNets.length === 0 ? 0 : farmNets[Math.floor(farmNets.length / 2)]!;
+  // The plan-deposit sentence is built from the computed numbers, never assumed: on
+  // this snapshot one row (anemoy-capital) breaks even at its plan deposit after the
+  // radar-6 term drop nearly doubled its implied value, so the sentence must say 193
+  // of 194, not "all 194 rows".
+  const bestPlanNet = nets[nets.length - 1]!;
+  const bestPlanRow = board.find((r) => r.farm_net_at_plan_usd === bestPlanNet)!;
+  const planSentence = nonNegative === 0
+    ? `Expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(bestPlanNet).toFixed(2)})`
+    : `Expected net at the plan deposit is negative on ${board.length - nonNegative} of ${board.length} rows — ${bestPlanRow.slug} (#${bestPlanRow.rank}) breaks even at its plan deposit (+$${bestPlanNet.toFixed(2)})`;
   return {
     formula: 'Break-even deposit D* = gas x TVL / expected value: a deposit D holds D/TVL of the protocol, so its expected claim is D x EV / TVL, and net = 0 solves to D* = gas x TVL / EV.',
     assumption: 'Pro-rata share of the FULL implied launch value: a generous upper bound on the claim (a real airdrop pool is a fraction of token supply), so D* is a lower bound on the true break-even deposit and the verdicts are optimistic, not conservative.',
-    thresholds: 'FARM if D* is at most twice the plan deposit; THIN if more than twice and at most 10x the plan deposit; SKIP if more than 10x the plan deposit or token odds below 1%. Capital is TVL-tiered ($250/$150/$100/$50), never flat.',
+    sized_deposit_rule: 'Sized deposit S = min(2 x D*, 10 x plan deposit): twice the break-even deposit, capped at ten times the TVL-tiered plan deposit ($250/$150/$100/$50), so S is at most $2,500. The multiple 2 and the cap 10x are the rule\u2019s two stated parameters; every row\u2019s sized deposit comes out of this one formula.',
+    thresholds: 'Verdicts are computed at the sized deposit: FARM if S reaches 2 x D* within the cap (D* at most 5x the plan deposit) — expected net at S is then exactly one gas bill, positive by construction; THIN if S is capped at 10x the plan deposit but net at S is still positive; SKIP if net at S is zero or negative (D* over 10x the plan deposit) or token odds below 1%.',
     counts,
     net_at_plan_usd: { min: nets[0]!, median: Math.round(medianNet * 100) / 100, max: nets[nets.length - 1]! },
     net_non_negative_rows: nonNegative,
-    note: `Expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(nets[nets.length - 1]!).toFixed(2)}), so no row is FARM at its plan deposit as written; FARM means the break-even deposit is within doubling distance of the plan deposit.`,
+    net_at_sized_usd: { min: netsSized[0]!, median: Math.round(medianNetSized * 100) / 100, max: netsSized[netsSized.length - 1]! },
+    sized_positive_net_rows: positiveSized,
+    median_sized_deposit_usd: medianSized,
+    note: `At the sized deposit (twice break-even, capped at 10x the plan deposit), ${counts.farm} rows are FARM with positive expected net (median +$${farmMedianNet.toFixed(2)} at the sized deposit, exactly one gas bill by construction), ${counts.thin} are THIN and ${counts.skip} are SKIP. ${planSentence}: the plan deposit was never the sized deposit, and the verdicts are a per-dollar efficiency statement, not a value ranking — Sentora (#1) is SKIP at any reasonable deposit.`,
   };
 }
 

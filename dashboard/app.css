@@ -128,7 +128,7 @@ tbody tr.selected { background: var(--surface2); }
 .fbadge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; vertical-align: 1px; }
 .fb-farm { background: var(--green); color: #06130c; }
 .fb-thin { background: var(--accent); color: #191204; }
-.fb-skip { background: #3a4350; color: #c6cdd8; }
+.fb-grey { background: #3a4350; color: #c6cdd8; }
 .fbe { font-variant-numeric: tabular-nums; }
 .farm-verdict { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; margin: 0 0 16px; }
 .farm-verdict .fbadge { font-size: 12px; padding: 2px 9px; }
@@ -151,5 +151,5 @@ footer p { margin: 0; }
 
 @media (max-width: 720px) {
   .top, main { padding-left: 16px; padding-right: 16px; }
-  th:nth-child(7), td:nth-child(7), th:nth-child(8), td:nth-child(8), th:nth-child(9), td:nth-child(9) { display: none; }
+  th:nth-child(6), td:nth-child(6), th:nth-child(7), td:nth-child(7), th:nth-child(8), td:nth-child(8) { display: none; }
 }

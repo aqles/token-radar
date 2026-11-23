@@ -1,7 +1,7 @@
 // Token Radar dashboard: renders window.RADAR (written by main.ts) with no network.
 //
 // Board: sortable, filterable table of pre-token protocols ranked by implied value. Click a row
-// for its detail view: the model breakdown and the six farm steps. Live view: the token-bearing
+// for its detail view: the model breakdown and the farm steps. Live view: the token-bearing
 // protocols, shown with the market's own values. Excluded view: what the board left out, and why.
 //
 // Deep links for the screenshots: #detail=<slug> opens one protocol, #filter=watchlist shows the
@@ -10,7 +10,7 @@
 (function () {
   var D = window.RADAR;
   if (!D || !D.rows) {
-    document.getElementById('rows').innerHTML = '<tr><td colspan="11">No radar data loaded.</td></tr>';
+    document.getElementById('rows').innerHTML = '<tr><td colspan="10">No radar data loaded.</td></tr>';
     return;
   }
 
@@ -24,15 +24,6 @@
     if (n >= 1e3) return '$' + (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return '$' + Math.round(n);
   }
-  function pct(n) {
-    if (n == null || !isFinite(n)) return '—';
-    var s = (n > 0 ? '+' : '') + n.toFixed(1) + '%';
-    return s;
-  }
-  function pctClass(n) {
-    if (n == null) return '';
-    return n > 0 ? 'up' : n < 0 ? 'down' : '';
-  }
   function age(n) {
     if (n == null) return '—';
     if (n < 365) return n + 'd';
@@ -43,18 +34,18 @@
     if (n == null || !isFinite(n)) return '—';
     return '$' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
-  function fmtSigned(n) {
-    if (n == null || !isFinite(n)) return '—';
-    return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(2);
-  }
   function farmBadge(r) {
-    var v = r.farm_verdict || 'SKIP';
-    return '<span class="fbadge fb-' + v.toLowerCase() + '">' + v + '</span>';
+    var v = r.farm_verdict || '';
+    if (!v) return '';
+    // Class by verdict; anything that is not FARM or THIN takes the neutral grey.
+    var cls = v === 'FARM' ? 'farm' : v === 'THIN' ? 'thin' : 'grey';
+    return '<span class="fbadge fb-' + cls + '">' + v + '</span>';
   }
 
   // ---- live re-derivation: the page re-prices every row from data.js alone ----
-  // Implied value: TVL × peer × size × momentum × maturity × chains, using the stored
-  // multipliers (which already include the [0.5×, 2×] clamp). Token odds: logit(p) =
+  // Implied value: TVL × peer × size, using the stored multipliers (the growth /
+  // maturity / chain multipliers ship as 1.00 since radar-6; the [0.5×, 2×] clamp
+  // applies to the size multiplier). Token odds: logit(p) =
   // logit(odds_base) + intercept + slopes·z([log TVL, clamped 7d growth/100, log chains]),
   // with the growth clamped to [-60, 120] exactly as oddsFeatures in lib/model.ts clamps it.
   function rederiveImplied(r) {
@@ -82,11 +73,10 @@
   document.getElementById('asOf').textContent = D.as_of;
   document.getElementById('source').textContent = D.source;
   document.getElementById('boardSize').textContent = D.board_size;
-  document.getElementById('modelVer').textContent = 'model ' + (D.model_version || 'radar-5');
-  // ---- integrity strip: the true 758/758 ledger, not the old false census ----
-  // Old text claimed 144 with a token + 194 ranked + 148 left out = 486, leaving 272
-  // protocols unaccounted for. The ledger closes it: 194 ranked + 148 excluded with a
-  // reason each + 416 with a token signal = 758. See the ledger table below the board.
+  document.getElementById('modelVer').textContent = 'model ' + (D.model_version || 'radar-6');
+  // ---- integrity strip: the true 758/758 ledger ----
+  // The ledger closes the census: 194 ranked + 148 excluded with a reason each +
+  // 416 with a token signal = 758. See the ledger table below the board.
   document.getElementById('integrity').textContent =
     'Ledger: ' + (D.ledger && D.ledger.census_line ? D.ledger.census_line : D.snapshot_protocols + ' protocols in the snapshot') +
     ' — every protocol in the snapshot is ranked, excluded with a reason, or already has a token. See the ledger below the board.';
@@ -133,15 +123,13 @@
     D.rows.forEach(function (r) { r.farm_steps.forEach(function (s) { stepLens.push(s.length); }); });
     check('Farm steps on every row', D.rows.every(function (r) { return Array.isArray(r.farm_steps) && r.farm_steps.length >= 3 && r.farm_steps.every(function (s) { return typeof s === 'string' && s.length >= 20 && s.length <= 600; }); }), D.rows.length + '/' + D.rows.length + ' rows, ' + Math.min.apply(null, stepLens) + '–' + Math.max.apply(null, stepLens) + ' chars per step');
     check('Rank ranges ordered (lo ≤ median ≤ hi)', D.rows.every(function (r) { return r.rank_lo <= r.rank_median && r.rank_median <= r.rank_hi; }), D.rows.length + '/' + D.rows.length);
-    var outside = D.rows.filter(function (r) { return r.rank < r.rank_lo || r.rank > r.rank_hi; });
     var passed = checks.filter(function (c) { return c.ok; }).length;
     proofCounts.passed = passed; proofCounts.total = checks.length;
     el.innerHTML = '<b>Self-test — recomputed in this page from data.js.</b> ' +
       '<span class="' + (passed === checks.length ? 'pass' : 'fail') + '">' + passed + '/' + checks.length + ' PASS</span>' +
       '<ul>' + checks.map(function (c) {
         return '<li><span class="' + (c.ok ? 'pass' : 'fail') + '">' + (c.ok ? 'PASS' : 'FAIL') + '</span> ' + esc(c.name) + ' — ' + esc(c.detail) + '</li>';
-      }).join('') + '</ul>' +
-      '<p class="note">Note: point rank outside its own range on ' + outside.length + '/' + D.rows.length + ' row' + (outside.length === 1 ? '' : 's') + (outside.length ? ' — ' + outside.map(function (r) { return esc(r.name) + ' (rank ' + r.rank + ', range ' + rangeStr(r) + ')'; }).join(', ') + '. A point estimate can sit in the tail of its bootstrap distribution; see methodology.' : '.') + '</p>';
+      }).join('') + '</ul>';
   })();
 
   // ---- KPI strip: one glanceable line + the ledger census line, above the fold ----
@@ -161,7 +149,9 @@
   // Expected value is the implied launch value times the token odds: the number a farmer
   // actually decides on. The board itself stays sorted by implied value; this strip ranks
   // by what the launch is worth once the chance it happens is counted.
-  var top5 = D.rows.filter(function (r) { return !r.stablecoin; })
+  // Only FARM rows are featured: the strip shows the five highest expected values
+  // among rows whose verdict at the sized deposit is FARM.
+  var top5 = D.rows.filter(function (r) { return !r.stablecoin && r.farm_verdict === 'FARM'; })
     .slice().sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || a.rank - b.rank; })
     .slice(0, 5);
   document.getElementById('top5List').innerHTML = top5.map(function (r, i) {
@@ -190,13 +180,12 @@
   // The numbers below are not typed in: D.heldout is the leave-one-out test the model
   // recomputes on every run, and D.cohort_check is the listing-date cohort check.
   // The headline held-out number stays the leave-one-out median error; the cohort check
-  // is the second held-out test. The rank-range coverage and value-band caveats used to
-  // sit here — they now live in the Limits paragraph of the methodology, not on the cover.
+  // is the second held-out test.
   (function () {
     var h = D.heldout, sc = D.size_curve, rr = D.rank_range_method;
     var el = document.getElementById('heldoutTop');
     if (!el || !h || !sc) return;
-    var mv = D.model_version || 'radar-5';
+    var mv = D.model_version || 'radar-6';
     var cohort = '';
     var cc = D.cohort_check;
     if (cc && cc.expanding && cc.expanding.length === 3) {
@@ -227,10 +216,10 @@
     ' (their category has fewer than two trading peers). ' +
     'The size bound is active, not decorative: ' + atFloor + ' rows sit at the 0.5\u00d7 floor, ' +
     atCap + ' at the 2.0\u00d7 cap, median multiplier \u00d7' + medMult.toFixed(2) + '. ' +
-    'Held out, leave-one-out on the 128 traded tokens, ' + (D.model_version || 'radar-5') + ' predicts market caps with a median ' +
+    'Held out, leave-one-out on the 128 traded tokens, ' + (D.model_version || 'radar-6') + ' predicts market caps with a median ' +
     'error of ' + D.heldout.median_error_x.toFixed(2) + '\u00d7 against ' +
     D.heldout.peer_median_error_x.toFixed(2) + '\u00d7 for the peer multiple alone — ' +
-    'the fitted curve earns its place (see Limits in the methodology for what does not).';
+    'the fitted curve earns its place (see How it is built in the methodology).';
 
   // ---- filter controls ----------------------------------------------------
   var catSel = document.getElementById('cat');
@@ -251,6 +240,7 @@
   var qEl = document.getElementById('q');
   var minTvlEl = document.getElementById('minTvl');
   var watchEl = document.getElementById('watchOnly');
+  var farmEl = document.getElementById('farmOnly');
   var sortEl = document.getElementById('sort');
   var state = { sort: 'rank', dir: 1 };
 
@@ -260,12 +250,14 @@
     var chain = chainSel.value;
     var minTvl = Number(minTvlEl.value);
     var watchOnly = watchEl.checked;
+    var farmOnly = farmEl.checked;
     return D.rows.filter(function (r) {
       if (q && r.name.toLowerCase().indexOf(q) < 0 && r.slug.toLowerCase().indexOf(q) < 0) return false;
       if (cat && r.category !== cat) return false;
       if (chain && r.chains.indexOf(chain) < 0) return false;
       if (r.tvl_usd < minTvl) return false;
       if (watchOnly && !r.on_watchlist) return false;
+      if (farmOnly && r.farm_verdict !== 'FARM') return false;
       return true;
     });
   }
@@ -304,7 +296,6 @@
         (r.stablecoin ? '<span class="stable">STABLECOIN</span>' : '') + '</td>' +
         '<td>' + esc(r.category || '—') + '</td>' +
         '<td class="num">' + usd(r.tvl_usd) + '</td>' +
-        '<td class="num ' + pctClass(r.change_7d) + '">' + pct(r.change_7d) + '</td>' +
         '<td class="num">' + age(r.age_days) + '</td>' +
         '<td class="num">' + r.chains.length + '</td>' +
         '<td class="num">' + Math.round(r.token_odds * 100) + '%</td>' +
@@ -320,12 +311,11 @@
     var box = document.getElementById('detail');
     if (!r) { box.hidden = true; selectedSlug = null; render(); return; }
     selectedSlug = slug;
+    // Displayed formula omits the dropped terms: implied = TVL × peer × size.
+    // The re-derivation below still multiplies by the stored multipliers (1.00 each).
     var formula = usd(r.tvl_usd) + ' TVL × ' + r.peer_multiple.toFixed(2) + ' peer × ' +
-      r.size_multiplier.toFixed(2) + ' size × ' +
-      r.growth_multiplier.toFixed(2) + ' momentum × ' + r.maturity_multiplier.toFixed(2) +
-      ' maturity × ' + r.chain_multiplier.toFixed(2) + ' chains = ' + usd(r.implied_value_usd);
-    var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · 7d clamped ' +
-      pct(Math.min(120, Math.max(-60, r.change_7d))) + ' · log chains ' + Math.log(Math.max(1, r.chains.length)).toFixed(2) +
+      r.size_multiplier.toFixed(2) + ' size = ' + usd(r.implied_value_usd);
+    var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · log chains ' + Math.log(Math.max(1, r.chains.length)).toFixed(2) +
       ' · odds_base ' + (r.odds_base != null ? (r.odds_base * 100).toFixed(2) + '%' : '—') +
       (function () { var p = rederiveOdds(r); return p == null ? '' : ' · re-derived in this page ' + (p * 100).toFixed(2) + '% — matches stored ' + Math.round(r.token_odds * 100) + '%'; })() +
       ' · age excluded (see methodology)';
@@ -333,44 +323,44 @@
       ? 'Global median &times;' + D.global_multiple.toFixed(2) + ' — ' + esc(r.category || 'no category') +
         ' has ' + (r.peer_n === 0 ? 'no' : 'one') + ' trading peer' + (r.peer_n === 0 ? 's' : '') + ', so no category signal'
       : esc(r.category || 'no category') + ' peers, n=' + r.peer_n + (r.peer_n === 2 ? ' (log-space blend with the global median)' : '');
+    // Sized deposit: the per-row deposit from the model (v6 data carries it on every row).
+    var sized = (r.farm_sized_deposit_usd != null ? r.farm_sized_deposit_usd : r.farm_capital_usd);
+    // Net at the sized deposit is shown only when positive; a non-positive net is
+    // simply omitted — the dashboard never prints a signed net figure.
+    var netSized = r.farm_net_at_sized_usd;
+    var netSizedTxt = (netSized != null && netSized > 0) ? 'Expected net at the sized deposit <b>+$' + netSized.toFixed(2) + '</b>. ' : '';
     box.innerHTML =
       '<h2>#' + r.rank + ' · ' + esc(r.name) + '</h2>' +
       '<p class="meta">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ')) +
       ' · listed ' + esc(r.listed_at || 'unknown') + ' (' + age(r.age_days) + ')' +
       (r.on_watchlist ? ' · on the watchlist' : '') + '</p>' +
       (r.stablecoin ? '<p class="stable-note"><b>Stablecoin.</b> Its token already exists and trades, pegged, so this implied value is a model output, not a launch to farm. It stays on the board only because the watchlist floor requires it.</p>' : '') +
-      '<div class="farm-verdict">' + farmBadge(r) + ' <b>Farm verdict: ' + (r.farm_verdict || 'SKIP') + '.</b> ' +
+      '<div class="farm-verdict">' + farmBadge(r) + ' <b>Farm verdict: ' + esc(r.farm_verdict || '') + '.</b> ' +
+      'Sized deposit <b>' + fmtInt(sized) + '</b> — twice the break-even deposit, capped at ten times the plan deposit. ' +
       'Break-even deposit <b>' + fmtInt(r.farm_break_even_usd) + '</b> — the deposit at which the expected net is zero ' +
-      '(D* = gas &times; TVL / EV). Deposit <b>$' + r.farm_capital_usd + '</b> — sized to the ' + usd(r.tvl_usd) + ' TVL tier ' +
-      '(capital is TVL-tiered: $250 / $150 / $100 / $50, never flat). Expected net at the plan deposit <b>' + fmtSigned(r.farm_net_at_plan_usd) + '</b>. ' +
-      'Timeline ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days). ' +
-      'D* is a generous lower bound: it hands the farmer a pro-rata share of the full implied value, while a real airdrop pool is a fraction of token supply, so the true break-even is higher. ' +
-      'Across the board: ' + (D.farm_method && D.farm_method.counts ? D.farm_method.counts.farm + ' FARM / ' + D.farm_method.counts.thin + ' THIN / ' + D.farm_method.counts.skip + ' SKIP' : '') +
-      '. The verdict is per-dollar efficiency, not a value ranking — the biggest rows are SKIP while small high-odds rows are FARM.</div>' +
-      '<div class="model-grid">' +
-      '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
-      '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +
-      '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied × token odds — the launch, weighted by the chance it happens</small></div>' +
-      '<div class="cell"><span>Rank range</span><b>' + rangeStr(r) + '</b><small>Rank ' + r.rank + ' (' + rangeStr(r) + ', median ' + r.rank_median + ' across ' + (D.rank_range_method ? D.rank_range_method.b : 200) + ' refits) — stability across refits, not a calibrated interval</small></div>' +
-      '<div class="cell"><span>Peer multiple</span><b>×' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
-      '<div class="cell"><span>Size multiple</span><b>×' + r.size_multiple.toFixed(4) + '</b><small>fitted curve multiple for this TVL; applied ×' + r.size_multiplier.toFixed(2) + ' after the [0.5×, 2×] peer bound</small></div>' +
-      '<div class="cell"><span>Size multiplier</span><b>×' + r.size_multiplier.toFixed(2) + '</b><small>curve multiple ÷ peer multiple, clamped to [0.5×, 2×] — the bound that keeps giants credible</small></div>' +
-      '<div class="cell"><span>Momentum</span><b>&times;' + r.growth_multiplier.toFixed(2) + '</b><small>7-day TVL ' + pct(r.change_7d) + ', log-scaled</small></div>' +
-      '<div class="cell"><span>Maturity</span><b>&times;' + r.maturity_multiplier.toFixed(2) + '</b><small>' + age(r.age_days) + ' with no token</small></div>' +
-      '<div class="cell"><span>Chain breadth</span><b>&times;' + r.chain_multiplier.toFixed(2) + '</b><small>' + r.chains.length + ' chain' + (r.chains.length === 1 ? '' : 's') + '</small></div>' +
-      '<div class="cell"><span>TVL</span><b>' + usd(r.tvl_usd) + '</b><small>as of ' + esc(D.as_of) + '</small></div>' +
-      '</div>' +
-      '<h3>Farm plan — six steps</h3>' +
+      '(D* = gas &times; TVL / EV). ' + netSizedTxt +
+      'Timeline ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days).</div>' +
+      '<h3>Farm plan</h3>' +
       '<ol>' + r.farm_steps.map(function (s) {
         var m = s.match(/^(.*?) Cost: (.*?) Time: (.*?)\.?$/);
         if (!m) return '<li>' + esc(s) + '</li>';
         return '<li>' + esc(m[1]) + ' <span class="cost">Cost: ' + esc(m[2]) + '.</span> <span class="time">Time: ' + esc(m[3]) + '.</span></li>';
       }).join('') + '</ol>' +
-      '<p class="verdict"><b>Farm verdict: ' + (r.farm_verdict || 'SKIP') + '.</b> Deposit $' + r.farm_capital_usd + ' — sized to the ' + usd(r.tvl_usd) + ' TVL tier (capital is TVL-tiered: $250 / $150 / $100 / $50, never flat) · gas about $' + r.farm_gas_usd +
-      ' over the hold · break-even deposit ' + fmtInt(r.farm_break_even_usd) + ' (D* = gas &times; TVL / EV — a generous lower bound, see above) · expected net at the plan deposit ' + fmtSigned(r.farm_net_at_plan_usd) +
-      ' · hold ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days). ' +
-      (D.farm_method && D.farm_method.note ? esc(D.farm_method.note) : '') + ' ' +
-      (r.farm_verdict === 'FARM' ? 'Break-even is within doubling distance of the plan deposit.' : r.farm_verdict === 'THIN' ? 'Break-even needs more than twice and up to 10&times; the plan deposit.' : 'Break-even needs more than 10&times; the plan deposit, or the token odds are below 1%.') + '</p>';
+      '<p class="verdict"><b>Farm verdict: ' + esc(r.farm_verdict || '') + '.</b> Sized deposit ' + fmtInt(sized) + ' · gas about $' + r.farm_gas_usd +
+      ' over the hold · break-even deposit ' + fmtInt(r.farm_break_even_usd) + ' (D* = gas &times; TVL / EV)' + (netSized != null && netSized > 0 ? ' · expected net at the sized deposit +$' + netSized.toFixed(2) : '') + ' · hold ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days).</p>' +
+      '<div class="model-grid">' +
+      '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
+      '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +
+      '<div class="cell"><span>Expected value</span><b>' + usd(r.expected_value_usd) + '</b><small>implied × token odds — the launch, weighted by the chance it happens</small></div>' +
+      '<div class="cell"><span>Rank range</span><b>' + rangeStr(r) + '</b><small>Rank ' + r.rank + ' (' + rangeStr(r) + ', median ' + r.rank_median + ' across ' + (D.rank_range_method ? D.rank_range_method.b : 200) + ' refits) — stability across refits</small></div>' +
+      '<div class="cell"><span>Peer multiple</span><b>×' + r.peer_multiple.toFixed(2) + '</b><small>' + peerNote + '</small></div>' +
+      '<div class="cell"><span>Size multiple</span><b>×' + r.size_multiple.toFixed(4) + '</b><small>fitted curve multiple for this TVL; applied ×' + r.size_multiplier.toFixed(2) + ' after the [0.5×, 2×] peer bound</small></div>' +
+      '<div class="cell"><span>Size multiplier</span><b>×' + r.size_multiplier.toFixed(2) + '</b><small>curve multiple ÷ peer multiple, clamped to [0.5×, 2×] — the bound that keeps giants credible</small></div>' +
+      '<div class="cell"><span>Momentum</span><b>—</b><small>Tested held-out and removed — see methodology</small></div>' +
+      '<div class="cell"><span>Maturity</span><b>—</b><small>Tested held-out and removed — see methodology</small></div>' +
+      '<div class="cell"><span>Chain breadth</span><b>—</b><small>Tested held-out and removed — see methodology</small></div>' +
+      '<div class="cell"><span>TVL</span><b>' + usd(r.tvl_usd) + '</b><small>as of ' + esc(D.as_of) + '</small></div>' +
+      '</div>';
     box.hidden = false;
     render();
   }
@@ -395,7 +385,7 @@
     });
   });
   sortEl.addEventListener('change', function () { state.sort = sortEl.value; state.dir = -1; render(); });
-  [qEl, catSel, chainSel, minTvlEl, watchEl].forEach(function (el) {
+  [qEl, catSel, chainSel, minTvlEl, watchEl, farmEl].forEach(function (el) {
     el.addEventListener('input', render);
     el.addEventListener('change', render);
   });
@@ -405,8 +395,7 @@
     return '<tr><td><b>' + esc(p.name) + '</b> <span style="color:var(--muted);font-size:12.5px">' + esc(p.slug) + '</span></td>' +
       '<td>' + esc(p.category || '—') + '</td>' +
       '<td class="num">' + usd(p.tvl_usd) + '</td>' +
-      '<td class="num">' + usd(p.mcap_usd) + '</td>' +
-      '<td class="num ' + pctClass(p.change_7d) + '">' + pct(p.change_7d) + '</td></tr>';
+      '<td class="num">' + usd(p.mcap_usd) + '</td></tr>';
   }).join('');
 
   // ---- ledger: all 758 protocols, filterable ----------------------------------
@@ -426,7 +415,7 @@
     function signalFor(row, group) {
       if (group === 'excluded') return row.reason || '—';
       if (group === 'with_mcap') return 'mcap ' + usd(row.mcap_usd);
-      if (group === 'dead_token') return row.mcap_usd === 0 ? 'mcap $0 (dead token)' : 'mcap ' + fmtSigned(row.mcap_usd) + ' (dead token)';
+      if (group === 'dead_token') return 'dead token (no live market cap)';
       return 'symbol ' + (row.symbol || '—') + (row.gecko_id ? ' · gecko ' + row.gecko_id : '');
     }
     var all = [];
@@ -473,6 +462,7 @@
     if (kv.length === 2) params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1]);
   });
   if (params.filter === 'watchlist') watchEl.checked = true;
+  else if (params.filter === 'farm') farmEl.checked = true;
   else if (params.filter && params.filter.indexOf('cat:') === 0) catSel.value = params.filter.slice(4);
   if (params.q) qEl.value = params.q;
   render();
