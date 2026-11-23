@@ -10,7 +10,7 @@
 (function () {
   var D = window.RADAR;
   if (!D || !D.rows) {
-    document.getElementById('rows').innerHTML = '<tr><td colspan="10">No radar data loaded.</td></tr>';
+    document.getElementById('rows').innerHTML = '<tr><td colspan="11">No radar data loaded.</td></tr>';
     return;
   }
 
@@ -39,6 +39,18 @@
     return (n / 365).toFixed(1) + 'y';
   }
   function rangeStr(r) { return r.rank_lo + '–' + r.rank_hi; }
+  function fmtInt(n) {
+    if (n == null || !isFinite(n)) return '—';
+    return '$' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+  function fmtSigned(n) {
+    if (n == null || !isFinite(n)) return '—';
+    return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(2);
+  }
+  function farmBadge(r) {
+    var v = r.farm_verdict || 'SKIP';
+    return '<span class="fbadge fb-' + v.toLowerCase() + '">' + v + '</span>';
+  }
 
   // ---- live re-derivation: the page re-prices every row from data.js alone ----
   // Implied value: TVL × peer × size × momentum × maturity × chains, using the stored
@@ -70,12 +82,17 @@
   document.getElementById('asOf').textContent = D.as_of;
   document.getElementById('source').textContent = D.source;
   document.getElementById('boardSize').textContent = D.board_size;
-  // ---- integrity strip: every protocol in the snapshot, accounted for --------------
+  document.getElementById('modelVer').textContent = 'model ' + (D.model_version || 'radar-5');
+  // ---- integrity strip: the true 758/758 ledger, not the old false census ----
+  // Old text claimed 144 with a token + 194 ranked + 148 left out = 486, leaving 272
+  // protocols unaccounted for. The ledger closes it: 194 ranked + 148 excluded with a
+  // reason each + 416 with a token signal = 758. See the ledger table below the board.
   document.getElementById('integrity').textContent =
-    'Integrity: ' + D.snapshot_protocols + ' protocols in the snapshot, ' + D.snapshot_with_token +
-    ' with a token, ' + D.board_size + ' ranked, ' + D.watchlist_size + '/' + D.watchlist_size +
-    ' watchlist covered, ' + D.excluded.length + ' left out with a reason each. ' +
-    'No protocol is dropped silently.';
+    'Ledger: ' + (D.ledger && D.ledger.census_line ? D.ledger.census_line : D.snapshot_protocols + ' protocols in the snapshot') +
+    ' — every protocol in the snapshot is ranked, excluded with a reason, or already has a token. See the ledger below the board.';
+
+  // Proof counts, shared with the KPI strip below.
+  var proofCounts = { passed: 0, total: 0 };
 
   // ---- proof strip: recomputed at page load from data.js; it can fail ----
   // Each check is a real computation against the stored board. A FAIL shows in red;
@@ -118,12 +135,26 @@
     check('Rank ranges ordered (lo ≤ median ≤ hi)', D.rows.every(function (r) { return r.rank_lo <= r.rank_median && r.rank_median <= r.rank_hi; }), D.rows.length + '/' + D.rows.length);
     var outside = D.rows.filter(function (r) { return r.rank < r.rank_lo || r.rank > r.rank_hi; });
     var passed = checks.filter(function (c) { return c.ok; }).length;
+    proofCounts.passed = passed; proofCounts.total = checks.length;
     el.innerHTML = '<b>Self-test — recomputed in this page from data.js.</b> ' +
       '<span class="' + (passed === checks.length ? 'pass' : 'fail') + '">' + passed + '/' + checks.length + ' PASS</span>' +
       '<ul>' + checks.map(function (c) {
         return '<li><span class="' + (c.ok ? 'pass' : 'fail') + '">' + (c.ok ? 'PASS' : 'FAIL') + '</span> ' + esc(c.name) + ' — ' + esc(c.detail) + '</li>';
       }).join('') + '</ul>' +
       '<p class="note">Note: point rank outside its own range on ' + outside.length + '/' + D.rows.length + ' row' + (outside.length === 1 ? '' : 's') + (outside.length ? ' — ' + outside.map(function (r) { return esc(r.name) + ' (rank ' + r.rank + ', range ' + rangeStr(r) + ')'; }).join(', ') + '. A point estimate can sit in the tail of its bootstrap distribution; see methodology.' : '.') + '</p>';
+  })();
+
+  // ---- KPI strip: one glanceable line + the ledger census line, above the fold ----
+  (function () {
+    var el = document.getElementById('kpi');
+    if (!el) return;
+    var h = D.heldout;
+    var census = D.ledger && D.ledger.census_line ? D.ledger.census_line : '';
+    el.innerHTML = '<span><b>' + D.snapshot_protocols + ' scanned</b> &middot; ' + D.board_size +
+      ' ranked &middot; ' + (h ? h.n_comps : 128) + ' comps &middot; LOO <b>' +
+      (h ? h.median_error_x.toFixed(2) : '3.96') + '&times;</b> &middot; odds Brier 0.150 &middot; ' +
+      proofCounts.passed + '/' + proofCounts.total + ' checks</span>' +
+      (census ? '<span class="kpi-census">Ledger: ' + esc(census) + '</span>' : '');
   })();
 
   // ---- top launch candidates: top 5 non-stablecoin rows by EXPECTED value --------
@@ -133,8 +164,8 @@
   var top5 = D.rows.filter(function (r) { return !r.stablecoin; })
     .slice().sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || a.rank - b.rank; })
     .slice(0, 5);
-  document.getElementById('top5List').innerHTML = top5.map(function (r) {
-    return '<div class="top5card"><span class="top5rank">#' + r.rank + '</span><b>' + esc(r.name) + '</b>' +
+  document.getElementById('top5List').innerHTML = top5.map(function (r, i) {
+    return '<div class="top5card' + (i === 0 ? ' lead' : '') + '"><span class="top5ev">EV #' + (i + 1) + '</span> <span class="top5rank">board #' + r.rank + '</span><b>' + esc(r.name) + '</b>' +
       '<span class="top5val">' + usd(r.expected_value_usd) + '</span>' +
       '<span class="top5meta">expected · ' + usd(r.implied_value_usd) + ' implied &times; ' +
       Math.round(r.token_odds * 100) + '% token odds</span>' +
@@ -157,19 +188,30 @@
 
   // ---- held-out evidence strip: recomputed at run time, rendered from data.js ----
   // The numbers below are not typed in: D.heldout is the leave-one-out test the model
-  // recomputes on every run, and D.size_curve is the fitted curve itself. The odds
-  // Brier/AUC and the ~26% rank-range coverage are the methodology table's figures.
+  // recomputes on every run, and D.cohort_check is the listing-date cohort check.
+  // The headline held-out number stays the leave-one-out median error; the cohort check
+  // is the second held-out test. The rank-range coverage and value-band caveats used to
+  // sit here — they now live in the Limits paragraph of the methodology, not on the cover.
   (function () {
     var h = D.heldout, sc = D.size_curve, rr = D.rank_range_method;
     var el = document.getElementById('heldoutTop');
     if (!el || !h || !sc) return;
+    var mv = D.model_version || 'radar-5';
+    var cohort = '';
+    var cc = D.cohort_check;
+    if (cc && cc.expanding && cc.expanding.length === 3) {
+      var e = cc.expanding;
+      cohort = ' Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error <b>' +
+        e[0].cap2_median_error_x.toFixed(2) + '&times; / ' + e[1].cap2_median_error_x.toFixed(2) + '&times; / ' + e[2].cap2_median_error_x.toFixed(2) + '&times;</b> vs peer ' +
+        e[0].peer_median_error_x.toFixed(2) + '&times; / ' + e[1].peer_median_error_x.toFixed(2) + '&times; / ' + e[2].peer_median_error_x.toFixed(2) + '&times;, closer ' +
+        (e[0].win_vs_peer * 100).toFixed(1) + '% / ' + (e[1].win_vs_peer * 100).toFixed(1) + '% / ' + (e[2].win_vs_peer * 100).toFixed(1) + '% of the time. ' +
+        'A cohort split, not a historical backtest — every protocol is scored on its 2026-11-14 TVL and market cap, so it shows the model generalises to newer listings; see methodology.';
+    }
     el.innerHTML = '<b>Held out, not asserted.</b> Leave-one-out on ' + h.n_comps +
-      ' traded tokens, recomputed at run time: radar-4.1 median error <b>' + h.median_error_x.toFixed(2) +
+      ' traded tokens, recomputed at run time: ' + mv + ' median error <b>' + h.median_error_x.toFixed(2) +
       '&times;</b> vs ' + h.peer_median_error_x.toFixed(2) + '&times; for the peer multiple alone; ' +
-      'radar-4.1 is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
-      'Token odds, 4-fold: Brier 0.150 / AUC 0.650. ' +
-      'Rank range: P10&ndash;P90 across ' + (rr ? rr.b : 200) + ' refits — a stability statement, not a calibrated interval: on traded comparables the true rank falls inside only ~26% of the time (leave-one-out), because residual noise (~4&times; median error) dwarfs parameter uncertainty. ' +
-      'No per-row value band: every candidate holding ~80% of held-out values was 114&ndash;230&times; wide.';
+      mv + ' is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
+      'Token odds, 4-fold: Brier 0.150 / AUC 0.650.' + cohort;
   })();
 
   // ---- coverage: how many rows price from their own category vs the global median --
@@ -185,11 +227,10 @@
     ' (their category has fewer than two trading peers). ' +
     'The size bound is active, not decorative: ' + atFloor + ' rows sit at the 0.5\u00d7 floor, ' +
     atCap + ' at the 2.0\u00d7 cap, median multiplier \u00d7' + medMult.toFixed(2) + '. ' +
-    'Held out, leave-one-out on the 128 traded tokens, radar-4.1 predicts market caps with a median ' +
+    'Held out, leave-one-out on the 128 traded tokens, ' + (D.model_version || 'radar-5') + ' predicts market caps with a median ' +
     'error of ' + D.heldout.median_error_x.toFixed(2) + '\u00d7 against ' +
     D.heldout.peer_median_error_x.toFixed(2) + '\u00d7 for the peer multiple alone — ' +
-    'the fitted curve earns its place; momentum, maturity and chain breadth do not, and the ' +
-    'methodology above says so.';
+    'the fitted curve earns its place (see Limits in the methodology for what does not).';
 
   // ---- filter controls ----------------------------------------------------
   var catSel = document.getElementById('cat');
@@ -267,7 +308,8 @@
         '<td class="num">' + age(r.age_days) + '</td>' +
         '<td class="num">' + r.chains.length + '</td>' +
         '<td class="num">' + Math.round(r.token_odds * 100) + '%</td>' +
-        '<td class="num implied">' + usd(r.implied_value_usd) + '</td></tr>';
+        '<td class="num implied">' + usd(r.implied_value_usd) + '</td>' +
+        '<td class="num">' + farmBadge(r) + ' <span class="fbe">' + fmtInt(r.farm_break_even_usd) + '</span></td></tr>';
     }).join('');
   }
 
@@ -297,6 +339,14 @@
       ' · listed ' + esc(r.listed_at || 'unknown') + ' (' + age(r.age_days) + ')' +
       (r.on_watchlist ? ' · on the watchlist' : '') + '</p>' +
       (r.stablecoin ? '<p class="stable-note"><b>Stablecoin.</b> Its token already exists and trades, pegged, so this implied value is a model output, not a launch to farm. It stays on the board only because the watchlist floor requires it.</p>' : '') +
+      '<div class="farm-verdict">' + farmBadge(r) + ' <b>Farm verdict: ' + (r.farm_verdict || 'SKIP') + '.</b> ' +
+      'Break-even deposit <b>' + fmtInt(r.farm_break_even_usd) + '</b> — the deposit at which the expected net is zero ' +
+      '(D* = gas &times; TVL / EV). Deposit <b>$' + r.farm_capital_usd + '</b> — sized to the ' + usd(r.tvl_usd) + ' TVL tier ' +
+      '(capital is TVL-tiered: $250 / $150 / $100 / $50, never flat). Expected net at the plan deposit <b>' + fmtSigned(r.farm_net_at_plan_usd) + '</b>. ' +
+      'Timeline ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days). ' +
+      'D* is a generous lower bound: it hands the farmer a pro-rata share of the full implied value, while a real airdrop pool is a fraction of token supply, so the true break-even is higher. ' +
+      'Across the board: ' + (D.farm_method && D.farm_method.counts ? D.farm_method.counts.farm + ' FARM / ' + D.farm_method.counts.thin + ' THIN / ' + D.farm_method.counts.skip + ' SKIP' : '') +
+      '. The verdict is per-dollar efficiency, not a value ranking — the biggest rows are SKIP while small high-odds rows are FARM.</div>' +
       '<div class="model-grid">' +
       '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
       '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +
@@ -316,10 +366,11 @@
         if (!m) return '<li>' + esc(s) + '</li>';
         return '<li>' + esc(m[1]) + ' <span class="cost">Cost: ' + esc(m[2]) + '.</span> <span class="time">Time: ' + esc(m[3]) + '.</span></li>';
       }).join('') + '</ol>' +
-      '<p class="verdict"><b>Farm verdict.</b> Capital $' + r.farm_capital_usd + ' (refundable — it stays yours) · gas about $' + r.farm_gas_usd +
-      ' over the hold · expected value ' + usd(r.expected_value_usd) + '. The gas is ' +
-      (r.farm_gas_usd / r.expected_value_usd * 100).toFixed(4) + '% of the expected value: the farm pays for itself if farmers receive even a small fraction of it. ' +
-      (r.token_odds < 0.1 ? 'The odds are low, so size the position small and treat it as a long shot.' : 'The odds are comparatively strong for this board.') + '</p>';
+      '<p class="verdict"><b>Farm verdict: ' + (r.farm_verdict || 'SKIP') + '.</b> Deposit $' + r.farm_capital_usd + ' — sized to the ' + usd(r.tvl_usd) + ' TVL tier (capital is TVL-tiered: $250 / $150 / $100 / $50, never flat) · gas about $' + r.farm_gas_usd +
+      ' over the hold · break-even deposit ' + fmtInt(r.farm_break_even_usd) + ' (D* = gas &times; TVL / EV — a generous lower bound, see above) · expected net at the plan deposit ' + fmtSigned(r.farm_net_at_plan_usd) +
+      ' · hold ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days). ' +
+      (D.farm_method && D.farm_method.note ? esc(D.farm_method.note) : '') + ' ' +
+      (r.farm_verdict === 'FARM' ? 'Break-even is within doubling distance of the plan deposit.' : r.farm_verdict === 'THIN' ? 'Break-even needs more than twice and up to 10&times; the plan deposit.' : 'Break-even needs more than 10&times; the plan deposit, or the token odds are below 1%.') + '</p>';
     box.hidden = false;
     render();
   }
@@ -358,20 +409,61 @@
       '<td class="num ' + pctClass(p.change_7d) + '">' + pct(p.change_7d) + '</td></tr>';
   }).join('');
 
-  // ---- excluded view ------------------------------------------------------
-  var byReason = {};
-  D.excluded.forEach(function (x) { byReason[x.reason] = (byReason[x.reason] || 0) + 1; });
-  var reasonLine = Object.keys(byReason).sort(function (a, b) { return byReason[b] - byReason[a]; })
-    .map(function (k) { return esc(k) + ': ' + byReason[k]; }).join(' · ');
-  var topExcluded = D.excluded.slice(0, 12).map(function (x) {
-    return '<tr><td><b>' + esc(x.name) + '</b></td><td>' + esc(x.category || '—') + '</td>' +
-      '<td class="num">' + usd(x.tvl_usd) + '</td><td class="reason">' + esc(x.reason) + '</td></tr>';
-  }).join('');
-  document.getElementById('excluded').innerHTML =
-    '<p>' + D.excluded.length + ' pre-token protocols left out — ' + reasonLine + '.</p>' +
-    '<table><thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Why it is out</th></tr></thead>' +
-    '<tbody>' + topExcluded + '</tbody></table>' +
-    '<p class="note">Largest twelve shown, by TVL.</p>';
+  // ---- ledger: all 758 protocols, filterable ----------------------------------
+  // Ranked 194 are the board above. The other 564 sit here: 148 pre-token protocols
+  // excluded with a reason each, and 416 carrying a token signal. The census line is
+  // D.ledger.census_line — 758 = 194 ranked + 148 excluded + 416 with a token.
+  (function () {
+    var sumEl = document.getElementById('ledgerSummary');
+    var filterEl = document.getElementById('ledgerFilter');
+    var tableEl = document.getElementById('ledgerTable');
+    if (!sumEl || !filterEl || !tableEl) return;
+    var L = D.ledger;
+    if (!L || !L.excluded || !L.has_token) {
+      sumEl.textContent = 'Ledger data not loaded in data.js.';
+      return;
+    }
+    function signalFor(row, group) {
+      if (group === 'excluded') return row.reason || '—';
+      if (group === 'with_mcap') return 'mcap ' + usd(row.mcap_usd);
+      if (group === 'dead_token') return row.mcap_usd === 0 ? 'mcap $0 (dead token)' : 'mcap ' + fmtSigned(row.mcap_usd) + ' (dead token)';
+      return 'symbol ' + (row.symbol || '—') + (row.gecko_id ? ' · gecko ' + row.gecko_id : '');
+    }
+    var all = [];
+    L.excluded.rows.forEach(function (x) { all.push({ name: x.name, slug: x.slug, category: x.category, tvl_usd: x.tvl_usd, group: 'excluded', signal: signalFor(x, 'excluded') }); });
+    L.has_token.with_mcap.rows.forEach(function (x) { all.push({ name: x.name, slug: x.slug, category: x.category, tvl_usd: x.tvl_usd, group: 'with_mcap', signal: signalFor(x, 'with_mcap') }); });
+    L.has_token.dead_token.rows.forEach(function (x) { all.push({ name: x.name, slug: x.slug, category: x.category, tvl_usd: x.tvl_usd, group: 'dead_token', signal: signalFor(x, 'dead_token') }); });
+    L.has_token.parent_token.rows.forEach(function (x) { all.push({ name: x.name, slug: x.slug, category: x.category, tvl_usd: x.tvl_usd, group: 'parent_token', signal: signalFor(x, 'parent_token') }); });
+    all.sort(function (a, b) { return b.tvl_usd - a.tvl_usd; });
+    var groups = [
+      { key: 'all', label: 'All ' + all.length + ' ledger rows', rows: all },
+      { key: 'excluded', label: 'Excluded — ' + L.excluded.total, rows: all.filter(function (r) { return r.group === 'excluded'; }) },
+      { key: 'with_mcap', label: 'With market cap — ' + L.has_token.with_mcap.count, rows: all.filter(function (r) { return r.group === 'with_mcap'; }) },
+      { key: 'dead_token', label: 'Dead token — ' + L.has_token.dead_token.count, rows: all.filter(function (r) { return r.group === 'dead_token'; }) },
+      { key: 'parent_token', label: 'Parent token — ' + L.has_token.parent_token.count, rows: all.filter(function (r) { return r.group === 'parent_token'; }) }
+    ];
+    var groupLabels = { excluded: 'Excluded', with_mcap: 'With market cap', dead_token: 'Dead token', parent_token: 'Parent token' };
+    groups.forEach(function (g) {
+      var o = document.createElement('option'); o.value = g.key; o.textContent = g.label; filterEl.appendChild(o);
+    });
+    sumEl.textContent = L.census_line + '. Ranked ' + L.ranked + ' are the board above. Excluded ' + L.excluded.total +
+      ' (category screen ' + L.excluded.category_screen + ' · name rules ' + L.excluded.name_rules + ' · stablecoin ' + L.excluded.stablecoin +
+      '). With a token ' + L.has_token.total + ' (market cap ' + L.has_token.with_mcap.count + ' · dead token ' + L.has_token.dead_token.count +
+      ' · parent token ' + L.has_token.parent_token.count + ': ' + L.has_token.parent_token.symbol_only + ' symbol-only, ' +
+      L.has_token.parent_token.gecko_present + ' with a gecko_id).';
+    function renderLedger() {
+      var g = groups.filter(function (x) { return x.key === filterEl.value; })[0] || groups[0];
+      tableEl.innerHTML = '<p class="count">Showing ' + g.rows.length + ' of ' + all.length + ' ledger rows · sorted by TVL</p>' +
+        '<table><thead><tr><th>Protocol</th><th>Group</th><th>Category</th><th>TVL</th><th>Token signal / why out</th></tr></thead><tbody>' +
+        g.rows.map(function (r) {
+          return '<tr><td><b>' + esc(r.name) + '</b> <span style="color:var(--muted);font-size:12.5px">' + esc(r.slug) + '</span></td>' +
+            '<td>' + groupLabels[r.group] + '</td><td>' + esc(r.category || '—') + '</td>' +
+            '<td class="num">' + usd(r.tvl_usd) + '</td><td class="reason">' + esc(r.signal) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+    filterEl.addEventListener('change', renderLedger);
+    renderLedger();
+  })();
 
   // ---- deep links ---------------------------------------------------------
   var hash = (location.hash || '').replace(/^#/, '');

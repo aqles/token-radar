@@ -1,4 +1,36 @@
-// Token launch radar, model radar-4.1: fitted size curve + category peer prior + fitted odds.
+// Token launch radar, model radar-5: fitted size curve + category peer prior + fitted odds.
+//
+// radar-5 is an ADDITIVE round on the radar-4.1 model: the fitted curve, the peer rule, the
+// [0.5x, 2x] clamp, the odds fit, the board values, the rank order and the farm steps are all
+// UNCHANGED (0 diffs across all 194 rows vs the v4.1 baseline — see
+// scratch/v5-model-evidence.md). What radar-5 adds, all computed from the snapshot at run time:
+// (a) a listing-date cohort check (RadarData.cohort_check): the cap2 model fitted on protocols
+// listed before 2023 / 2024 / 2025 and tested on those listed after, plus two rolling-origin
+// variants — a cohort split, NOT a historical backtest, because every protocol is scored on its
+// 2026-11-14 TVL and market cap; (b) a true 758/758 ledger (RadarData.ledger): 194 ranked +
+// 148 pre-token excluded with a reason each + 416 with a token, which replaces the old footer
+// strip's false arithmetic (144 + 194 + 148 = 486); (c) a computed farm verdict per row
+// (FARM / THIN / SKIP) from a solved break-even deposit, plus dated farm timelines.
+// The clamp stays 2x: relaxing it was tested and rejected in v5 (it buys 0.18x of LOO and moves
+// the top-2 multiples below 0.08x — a credibility judgement, not a model improvement).
+//
+// Break-even deposit (per row, see farmBreakEvenDeposit): a farmer depositing D into a protocol
+// with TVL T holds D/T of the protocol's TVL. If the launch's expected value EV (implied x
+// odds) were shared pro-rata by TVL, the farmer's expected claim is D * EV / TVL, so the
+// deposit at which expected net = 0 solves D* = gas * TVL / EV. This is a GENEROUS upper bound
+// on the claim — it hands the farmer a pro-rata share of the FULL implied launch value, while a
+// real airdrop pool is a fraction of token supply — so D* is a LOWER bound on the true
+// break-even deposit, and the verdicts built on it are optimistic, not conservative. The
+// rejected alternative (EV scaling with deposit from the plan deposit, D* = capital * gas / EV)
+// is degenerate: EV >> gas on every row, so D* would be pennies on all 194 rows. Verdict rule
+// (see farmVerdictFor): FARM if D* <= 2x the plan deposit, THIN if 2x < D* <= 10x, SKIP if
+// D* > 10x or token odds < 0.01. On this snapshot that gives 7 FARM / 89 THIN / 98 SKIP — and
+// expected net at the plan deposit is negative on ALL 194 rows (best -$4.90), so no row is
+// FARM at its plan deposit as written; FARM means the break-even deposit is within doubling
+// distance of the plan deposit. The verdict is a per-dollar efficiency statement, not a value
+// ranking: the biggest rows (Sentora, Steakhouse) are SKIP because their EV per TVL dollar is
+// small, while small high-odds rows are FARM. Capital is TVL-tiered ($250/$150/$100/$50),
+// never flat; hold days are age-tiered (60/45/30); timelines start at the snapshot date.
 //
 // Rank ranges are a STABILITY statement, not a prediction interval: each row's rank is
 // recomputed under 200 bootstrap refits of the size curve and the peer table (the 128
@@ -158,7 +190,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4.1';
+export const MODEL_VERSION = 'radar-5';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -168,6 +200,127 @@ export interface FarmStep {
   text: string;
   cost: string;
   time: string;
+}
+
+/**
+ * The computed farm verdict for one row (see farmVerdictFor). FARM: the solved break-even
+ * deposit is within twice the plan deposit. THIN: it needs up to 10x the plan deposit.
+ * SKIP: it needs more than 10x the plan deposit, or the token odds are below 1%.
+ */
+export type FarmVerdict = 'FARM' | 'THIN' | 'SKIP';
+
+/** One listing-date cohort split: the cap2 model fitted on earlier-listed protocols,
+ * tested on later-listed ones. Median errors are rounded to 2 decimals, win rate to 4. */
+export interface CohortSplit {
+  /** What was fitted and what was tested, e.g. 'listed before 2023-01-01 -> listed after'. */
+  label: string;
+  /** Comparables in the fit (dated only; undated comps are in neither fit nor test). */
+  fit_n: number;
+  /** Comparables in the test. */
+  test_n: number;
+  /** Median |predicted / actual| for the cap2 model on the test set. */
+  cap2_median_error_x: number;
+  /** Share of test comparables the cap2 model predicts closer than the peer alone. */
+  win_vs_peer: number;
+  /** Median |predicted / actual| for the peer multiple alone on the same test set. */
+  peer_median_error_x: number;
+  /** The split as one literal sentence, built from the rounded numbers above. */
+  text: string;
+}
+
+/**
+ * The listing-date cohort check: the cap2 model fitted on protocols listed before 2023 /
+ * 2024 / 2025 and tested on those listed after (expanding window, dated-only fit), plus
+ * two rolling-origin variants on dated comps sorted by listed_at. A cohort split, NOT a
+ * historical backtest: every protocol is scored on its 2026-11-14 TVL and market cap, so it
+ * shows the model generalises to newer listings — not that it would have predicted prices
+ * at the time. Never headline this as "walk-forward".
+ */
+export interface CohortCheck {
+  /** How each split was built. */
+  method: string;
+  /** The honest caveat, in full: what the check is and what it is not. */
+  note: string;
+  /** Token-bearing comparables with a listing date (fit/test population). */
+  dated_comps: number;
+  /** Token-bearing comparables with no listing date: they cannot be placed in time. */
+  undated_comps: number;
+  /** Expanding window, all dated test comps (3 splits: before 2023 / 2024 / 2025). */
+  expanding: CohortSplit[];
+  /** Same three splits, rankable-like test comps only. */
+  expanding_rankable_like: CohortSplit[];
+  /** Rolling origin, all dated test comps (oldest 50% -> next 25%; oldest 75% -> newest 25%). */
+  rolling: CohortSplit[];
+  /** Same two rolling splits, rankable-like test comps only. */
+  rolling_rankable_like: CohortSplit[];
+}
+
+/** One protocol that already carries a token signal, for the 758/758 ledger. */
+export interface LedgerHasTokenRow {
+  slug: string;
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  mcap_usd: number | null;
+  gecko_id: string | null;
+  symbol: string | null;
+  /** 'with_mcap' (mcap > 0) | 'dead_token' (mcap <= 0) | 'parent_token' (mcap null). */
+  group: 'with_mcap' | 'dead_token' | 'parent_token';
+}
+
+/**
+ * The true 758/758 ledger: every protocol in the snapshot, exactly once.
+ * 758 = 194 ranked + 148 pre-token excluded with a reason each + 416 with a token.
+ * The 416 split as 128 with mcap > 0, 16 dead-token (mcap <= 0: 15 zero + 1 negative),
+ * and 272 parent-token (mcap null: 258 symbol-only + 14 with a gecko_id, all 14 of which
+ * also carry a symbol — there is no gecko-only-without-symbol row). This replaces the old
+ * footer strip's arithmetic (144 + 194 + 148 = 486), which left 272 protocols unaccounted
+ * for and undercounted the rows carrying a token signal.
+ */
+export interface LedgerData {
+  total: number;
+  ranked: number;
+  excluded_total: number;
+  has_token_total: number;
+  /** The census as one literal line that sums: '758 = 194 ranked + 148 excluded + 416 with a token'. */
+  census_line: string;
+  excluded: {
+    total: number;
+    /** Excluded by the category screen (CEX / Liquid Staking / Bridge / ...). */
+    category_screen: number;
+    /** Excluded by the name rules (version marker / wrapped / staked / staking). */
+    name_rules: number;
+    /** Excluded as stablecoins (token already exists and trades). */
+    stablecoin: number;
+    /** The category-screen rows by category. */
+    by_category: { category: string; count: number }[];
+    /** All 148 excluded rows, with the reason each (TVL descending). */
+    rows: ExcludedRow[];
+  };
+  has_token: {
+    total: number;
+    with_mcap: { count: number; rows: LedgerHasTokenRow[] };
+    dead_token: { count: number; rows: LedgerHasTokenRow[] };
+    parent_token: { count: number; symbol_only: number; gecko_present: number; rows: LedgerHasTokenRow[] };
+  };
+}
+
+/** How the per-row farm verdicts and break-even deposits were computed (build-time). */
+export interface FarmMethod {
+  /** The break-even formula, in words. */
+  formula: string;
+  /** The assumption the formula rests on, and its direction (optimistic lower bound). */
+  assumption: string;
+  /** The verdict thresholds, in words. */
+  thresholds: string;
+  /** Verdict counts across the 194 board rows. */
+  counts: { farm: number; thin: number; skip: number };
+  /** Expected net at the plan deposit across the board (min / median / max, dollars). */
+  net_at_plan_usd: { min: number; median: number; max: number };
+  /** Rows whose expected net at the plan deposit is >= 0 (zero on this snapshot). */
+  net_non_negative_rows: number;
+  /** The headline the dashboard may quote: no row breaks even at its plan deposit as written. */
+  note: string;
 }
 
 /** One row of board.json: the ranked board's row. */
@@ -190,6 +343,18 @@ export interface BoardRow {
   expected_value_usd: number;
   farm_capital_usd: number;
   farm_gas_usd: number;
+  /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV (see farmBreakEvenDeposit). */
+  farm_break_even_usd: number;
+  /** The computed farm verdict: FARM / THIN / SKIP (see farmVerdictFor). */
+  farm_verdict: FarmVerdict;
+  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (negative on all 194 rows). */
+  farm_net_at_plan_usd: number;
+  /** The farm timeline starts at the snapshot date: the board's "today". */
+  farm_start_date: string;
+  /** Start date + the age-tiered hold days. */
+  farm_end_date: string;
+  /** Hold days for this row (age-tiered 60/45/30, same as farmCost). */
+  farm_hold_days: number;
   on_watchlist: boolean;
   model: {
     peer_multiple: number;
@@ -232,6 +397,18 @@ export interface RadarRow {
   expected_value_usd: number;
   farm_capital_usd: number;
   farm_gas_usd: number;
+  /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV. */
+  farm_break_even_usd: number;
+  /** The computed farm verdict: FARM / THIN / SKIP. */
+  farm_verdict: FarmVerdict;
+  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars. */
+  farm_net_at_plan_usd: number;
+  /** The farm timeline starts at the snapshot date. */
+  farm_start_date: string;
+  /** Start date + the age-tiered hold days. */
+  farm_end_date: string;
+  /** Hold days for this row (age-tiered 60/45/30). */
+  farm_hold_days: number;
   peer_multiple: number;
   peer_n: number;
   peer_fallback: boolean;
@@ -342,11 +519,11 @@ export interface OddsFitData {
 export interface HeldOut {
   /** Token-bearing comparables in the leave-one-out test. */
   n_comps: number;
-  /** Median |predicted / actual| for the radar-4 value multiple (peer x bounded size curve). */
+  /** Median |predicted / actual| for the radar-5 value multiple (peer x bounded size curve). */
   median_error_x: number;
   /** Median |predicted / actual| for the v3 peer multiple alone, on the same folds. */
   peer_median_error_x: number;
-  /** Share of held-out comparables the radar-4 multiple predicts closer than the peer alone. */
+  /** Share of held-out comparables the radar-5 multiple predicts closer than the peer alone. */
   win_rate_vs_peer: number;
 }
 
@@ -366,6 +543,12 @@ export interface RadarData {
   global_multiple: number;
   size_curve: SizeCurve | null;
   heldout: HeldOut;
+  /** The listing-date cohort check (a cohort split, not a historical backtest). */
+  cohort_check: CohortCheck;
+  /** The true 758/758 ledger: every protocol in the snapshot, exactly once. */
+  ledger: LedgerData;
+  /** How the per-row farm verdicts and break-even deposits were computed. */
+  farm_method: FarmMethod;
   /** How the per-row rank ranges were computed. */
   rank_range_method: RankRangeMethod;
   /** The fitted token-odds logistic model, serialised for live re-derivation. */
@@ -396,7 +579,9 @@ const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
 
 /**
  * A deterministic PRNG (mulberry32): the rank-range bootstrap draws from this and
- * nothing else — no Math.random, no Date, no network anywhere in the model path.
+ * nothing else — no Math.random, no wall clock, no network anywhere in the model path.
+ * (Date.parse / new Date appear only in addDaysUtc, applied to the snapshot's own as_of
+ * date — pure date arithmetic on snapshot data, not the clock.)
  */
 export function mulberry32(seed: number): () => number {
   let a = seed | 0;
@@ -704,7 +889,7 @@ export function sizeMultiplierFor(
 /**
  * The value model's own held-out test, recomputed at run time: leave-one-out over the
  * token-bearing comparables. Each comparable is held out once, the peer table and the size
- * curve are refit on the rest, and the radar-4 multiple (peer x peer-bounded size curve) is
+ * curve are refit on the rest, and the radar-5 multiple (peer x peer-bounded size curve) is
  * scored against the v3 peer multiple alone on the held-out market cap. Median error is
  * exp(median |log(pred / actual)|), the median factor by which the prediction is off.
  * No growth, maturity or chain terms enter this test: it tests the multiple, and those terms
@@ -738,6 +923,108 @@ export function looValueHeldOut(snapshot: Snapshot, model: ModelConstants = MODE
     median_error_x: round4(Math.exp(med(err4))),
     peer_median_error_x: round4(Math.exp(med(errPeer))),
     win_rate_vs_peer: Math.round((wins / n) * 1e4) / 1e4,
+  };
+}
+
+/** Round to 2 decimals (the cohort split's printed precision). */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/**
+ * One cohort split scored under the cap2 model: the peer table and the size curve are fit on
+ * `trainComps` only, and every `testComps` row is predicted as TVL x peer x peer-bounded size
+ * curve (no growth, maturity or chain terms — the same multiple looValueHeldOut tests).
+ * Returns the median errors and the win rate vs the peer multiple alone.
+ */
+function evalCohortSplit(trainComps: SnapshotProtocol[], testComps: SnapshotProtocol[], model: ModelConstants): { cap2: number; peer: number; win: number } {
+  const train: Snapshot = { protocols: trainComps, as_of: '', source: '', floor_usd: 1, watchlist: [] };
+  const peers = peerMultiples(train, model);
+  const curve = fitSizeCurve(train);
+  const eCap: number[] = [];
+  const ePeer: number[] = [];
+  for (const held of testComps) {
+    const peer = peerMultipleFor(held.category, peers, model).multiple;
+    const size = sizeMultiplierFor(held.tvl_usd, peer, curve, model);
+    const pred = Math.max(1, held.tvl_usd * peer * size.multiplier);
+    const predPeer = Math.max(1, held.tvl_usd * peer);
+    eCap.push(Math.abs(Math.log(pred / held.mcap_usd!)));
+    ePeer.push(Math.abs(Math.log(predPeer / held.mcap_usd!)));
+  }
+  const med = (xs: number[]): number => medianOf([...xs].sort((a, b) => a - b)) ?? 0;
+  const wins = eCap.filter((e, i) => e < ePeer[i]!).length;
+  return { cap2: Math.exp(med(eCap)), peer: Math.exp(med(ePeer)), win: testComps.length === 0 ? 0 : wins / testComps.length };
+}
+
+/** One cohort split as a serialisable record, with its literal sentence built from the rounded numbers. */
+function cohortSplit(label: string, trainComps: SnapshotProtocol[], testComps: SnapshotProtocol[], model: ModelConstants): CohortSplit {
+  const r = evalCohortSplit(trainComps, testComps, model);
+  const cap2 = round2(r.cap2);
+  const peer = round2(r.peer);
+  const win = Math.round(r.win * 1e4) / 1e4;
+  return {
+    label,
+    fit_n: trainComps.length,
+    test_n: testComps.length,
+    cap2_median_error_x: cap2,
+    win_vs_peer: win,
+    peer_median_error_x: peer,
+    text: `Fit on ${trainComps.length} protocols (${label.split(' -> ')[0]}), test on ${testComps.length} (${label.split(' -> ')[1]}): median error ${cap2.toFixed(2)}x vs peer ${peer.toFixed(2)}x, closer ${(win * 100).toFixed(1)}% of the time.`,
+  };
+}
+
+/**
+ * The listing-date cohort check, computed from the snapshot at run time. Expanding window,
+ * dated-only fit: the cap2 model is fitted on token-bearing comparables listed before
+ * 2023-01-01 / 2024-01-01 / 2025-01-01 and tested on those listed after; rolling origin:
+ * fit the oldest 50% of dated comps, test the next 25%, then fit the oldest 75%, test the
+ * newest 25% (dated comps sorted by listed_at, ties by slug). The 33 undated comparables
+ * appear in NEITHER fit nor test — they cannot be placed in time at all. Every protocol is
+ * scored on its 2026-11-14 TVL and market cap, so this is a cohort split (generalisation to
+ * newer listings), NOT a historical backtest, and the note says so in full.
+ */
+export function cohortCheck(snapshot: Snapshot, model: ModelConstants = MODEL): CohortCheck {
+  const comps = sizeComps(snapshot);
+  const dated = comps
+    .filter((p) => p.listed_at !== null)
+    .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug < b.slug ? -1 : 1));
+  const undated = comps.filter((p) => p.listed_at === null);
+  const rankableLike = (p: SnapshotProtocol): boolean =>
+    isRankable({ ...p, mcap_usd: null, gecko_id: null, symbol: null });
+  const expanding: CohortSplit[] = [];
+  const expandingRankable: CohortSplit[] = [];
+  for (const T of ['2023-01-01', '2024-01-01', '2025-01-01']) {
+    const fit = dated.filter((c) => c.listed_at! < T);
+    const test = dated.filter((c) => c.listed_at! >= T);
+    expanding.push(cohortSplit(`listed before ${T} -> listed after ${T}`, fit, test, model));
+    expandingRankable.push(cohortSplit(`listed before ${T} -> listed after ${T}`, fit, test.filter(rankableLike), model));
+  }
+  const rolling: CohortSplit[] = [];
+  const rollingRankable: CohortSplit[] = [];
+  // Rolling origin on the dated comps, sized relative to their count (95 here: 47 / 24 / 24).
+  const nDated = dated.length;
+  const half = Math.floor(nDated / 2);
+  const threeQ = Math.floor((nDated * 3) / 4);
+  const f1 = dated.slice(0, half);
+  const t1 = dated.slice(half, threeQ);
+  const f2 = dated.slice(0, threeQ);
+  const t2 = dated.slice(threeQ, nDated);
+  rolling.push(cohortSplit('oldest 50% -> next 25%', f1, t1, model));
+  rolling.push(cohortSplit('oldest 75% -> newest 25%', f2, t2, model));
+  rollingRankable.push(cohortSplit('oldest 50% -> next 25%', f1, t1.filter(rankableLike), model));
+  rollingRankable.push(cohortSplit('oldest 75% -> newest 25%', f2, t2.filter(rankableLike), model));
+  // The note is built from the computed splits, never typed in, so its numbers always
+  // match the table: median errors joined with ' / ', win rates as a range.
+  const errs = expanding.map((s) => `${s.cap2_median_error_x.toFixed(2)}x`).join(' / ');
+  const wins = expanding.map((s) => Math.round(s.win_vs_peer * 100));
+  const winRange = `${Math.min(...wins)}-${Math.max(...wins)}`;
+  return {
+    method: 'cap2 model (peer x peer-bounded size curve, [0.5x, 2x] clamp) fitted on dated token-bearing comparables only, tested on later-listed dated comparables; no growth, maturity or chain terms enter the test.',
+    note: `Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error ${errs} (closer than the peer median ${winRange}% of the time). This is a cohort split, not a historical backtest: every protocol is scored on its 2026-11-14 TVL and market cap, so it shows the model generalises to newer listings — not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.96x.`,
+    dated_comps: dated.length,
+    undated_comps: undated.length,
+    expanding,
+    expanding_rankable_like: expandingRankable,
+    rolling,
+    rolling_rankable_like: rollingRankable,
   };
 }
 
@@ -950,7 +1237,13 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const tokenOdds = tokenOddsFittedFor(p, oddsFit, model);
     const oddsBase = tokenOddsBaseFor(p.category, oddsFit.table, model);
     const cost = farmCost(p, v.age);
-    return { p, v, tokenOdds, oddsBase, expected: Math.max(1, Math.round(v.implied * tokenOdds)), cost };
+    const expected = Math.max(1, Math.round(v.implied * tokenOdds));
+    // Farm economics (additive: nothing above this line moves any priced value).
+    const breakEven = farmBreakEvenDeposit(p.tvl_usd, expected, cost.gas);
+    const verdict = farmVerdictFor(breakEven, cost.capital, tokenOdds);
+    const netAtPlan = farmNetAtPlan(cost.capital, p.tvl_usd, expected, cost.gas);
+    const timeline = farmTimeline(snapshot.as_of, v.age);
+    return { p, v, tokenOdds, oddsBase, expected, cost, breakEven, verdict, netAtPlan, timeline };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const rankRanges = bootstrapRankRanges(snapshot, scored.map((s) => ({
@@ -982,6 +1275,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     expected_value_usd: s.expected,
     farm_capital_usd: s.cost.capital,
     farm_gas_usd: s.cost.gas,
+    farm_break_even_usd: s.breakEven,
+    farm_verdict: s.verdict,
+    farm_net_at_plan_usd: s.netAtPlan,
+    farm_start_date: s.timeline.start_date,
+    farm_end_date: s.timeline.end_date,
+    farm_hold_days: s.timeline.hold_days,
     on_watchlist: snapshot.watchlist.includes(s.p.slug),
     model: {
       peer_multiple: round4(s.v.peer.multiple),
@@ -1090,6 +1389,64 @@ export function farmCost(p: SnapshotProtocol, age: number | null): { capital: nu
   const hold = holdDaysFor(age);
   const gas = 3 + (capital >= 150 ? 8 : 4) + Math.ceil(hold / 7) * 2;
   return { capital, gas, hold };
+}
+
+/**
+ * The solved break-even deposit, in whole dollars: D* = gas * TVL / EV.
+ *
+ * A farmer depositing D into a protocol with TVL T holds D/T of the protocol's TVL. If the
+ * launch's expected value EV (implied x odds) were shared pro-rata by TVL, the farmer's
+ * expected claim is D * EV / TVL, so expected net = D * EV / TVL - gas, and net = 0 solves
+ * to D* = gas * TVL / EV. EV is the row's expected_value_usd; gas is the row's farm_gas_usd.
+ *
+ * This is a GENEROUS upper bound on the claim — it hands the farmer a pro-rata share of the
+ * FULL implied launch value, while a real airdrop pool is a fraction of token supply — so D*
+ * is a LOWER bound on the true break-even deposit, and every verdict built on it is
+ * optimistic, not conservative. The rejected alternative (EV scaling with deposit from the
+ * plan deposit, D* = capital * gas / EV) is degenerate: EV >> gas on every row, so D* would
+ * be pennies on all 194 rows and every row would be FARM.
+ */
+export function farmBreakEvenDeposit(tvlUsd: number, expectedValueUsd: number, gasUsd: number): number {
+  if (expectedValueUsd <= 0 || tvlUsd <= 0 || gasUsd <= 0) return 0;
+  return Math.max(1, Math.round((gasUsd * tvlUsd) / expectedValueUsd));
+}
+
+/**
+ * The computed farm verdict from the solved break-even deposit D*, the plan deposit
+ * (capital, TVL-tiered $50/$100/$150/$250) and the token odds:
+ *   FARM  D* <= 2x capital: break-even within twice the plan deposit.
+ *   THIN  2x capital < D* <= 10x capital: break-even needs up to 10x the plan deposit.
+ *   SKIP  D* > 10x capital, or token odds < 0.01 (a sub-1% launch is a lottery ticket,
+ *         not a farm — on this snapshot all 5 sub-1% rows already exceed 10x, so the
+ *         odds clause binds on no additional row; it is a guard, not a driver).
+ * The verdict is a per-dollar efficiency statement, not a value ranking: the biggest rows
+ * are SKIP because their EV per TVL dollar is small, while small high-odds rows are FARM.
+ * On this snapshot: 7 FARM / 89 THIN / 98 SKIP, and expected net at the plan deposit is
+ * negative on all 194 rows — so no row is FARM at its plan deposit as written.
+ */
+export function farmVerdictFor(breakEvenUsd: number, capitalUsd: number, tokenOdds: number): FarmVerdict {
+  if (tokenOdds < 0.01 || breakEvenUsd > 10 * capitalUsd) return 'SKIP';
+  if (breakEvenUsd <= 2 * capitalUsd) return 'FARM';
+  return 'THIN';
+}
+
+/** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars, to cents. */
+export function farmNetAtPlan(capitalUsd: number, tvlUsd: number, expectedValueUsd: number, gasUsd: number): number {
+  if (tvlUsd <= 0) return -gasUsd;
+  return Math.round(((capitalUsd * expectedValueUsd) / tvlUsd - gasUsd) * 100) / 100;
+}
+
+/** A YYYY-MM-DD date string, `days` after `asOf` (UTC, no clock — asOf is the snapshot date). */
+export function addDaysUtc(asOf: string, days: number): string {
+  const t = Date.parse(`${asOf}T00:00:00Z`);
+  if (!Number.isFinite(t)) return asOf;
+  return new Date(t + days * DAY_MS).toISOString().slice(0, 10);
+}
+
+/** A row's farm timeline: start at the snapshot date, hold the age-tiered hold days. */
+export function farmTimeline(asOf: string, age: number | null): { start_date: string; hold_days: number; end_date: string } {
+  const hold = holdDaysFor(age);
+  return { start_date: asOf, hold_days: hold, end_date: addDaysUtc(asOf, hold) };
 }
 
 /** One curated farm plan: six steps, each an action with a cost and a time. */
@@ -1354,6 +1711,12 @@ export function radarRow(row: BoardRow): RadarRow {
     expected_value_usd: row.expected_value_usd,
     farm_capital_usd: row.farm_capital_usd,
     farm_gas_usd: row.farm_gas_usd,
+    farm_break_even_usd: row.farm_break_even_usd,
+    farm_verdict: row.farm_verdict,
+    farm_net_at_plan_usd: row.farm_net_at_plan_usd,
+    farm_start_date: row.farm_start_date,
+    farm_end_date: row.farm_end_date,
+    farm_hold_days: row.farm_hold_days,
     peer_multiple: row.model.peer_multiple,
     peer_n: row.model.peer_n,
     peer_fallback: row.model.peer_fallback,
@@ -1372,6 +1735,113 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
+/** Which ledger class a pre-token excluded protocol falls in (same order as exclusionReason). */
+function ledgerExcludedClass(p: SnapshotProtocol): 'category_screen' | 'name_rules' | 'stablecoin' {
+  if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) return 'category_screen';
+  if (isStablecoin(p)) return 'stablecoin';
+  return 'name_rules';
+}
+
+/**
+ * The true 758/758 ledger, computed from the snapshot at run time: every protocol exactly
+ * once — board rows ranked, pre-token rows excluded with a reason each, and rows carrying a
+ * token signal grouped by what the signal is. The census line is built from the counted
+ * numbers, so it always sums. This replaces the old footer strip's arithmetic
+ * (144 + 194 + 148 = 486), which left the 272 parent-token rows unaccounted for.
+ */
+export function buildLedger(snapshot: Snapshot, board: BoardRow[]): LedgerData {
+  const boardSlugs = new Set(board.map((r) => r.slug));
+  const excluded = excludedRows(snapshot);
+  const classes = { category_screen: 0, name_rules: 0, stablecoin: 0 };
+  const byCat = new Map<string, number>();
+  for (const p of snapshot.protocols) {
+    if (!isPreToken(p) || boardSlugs.has(p.slug) || exclusionReason(p) === null) continue;
+    const c = ledgerExcludedClass(p);
+    classes[c]++;
+    if (c === 'category_screen' && p.category !== null) byCat.set(p.category, (byCat.get(p.category) ?? 0) + 1);
+  }
+  const by_category = [...byCat.entries()]
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count || (a.category < b.category ? -1 : 1));
+  const toLedgerRow = (p: SnapshotProtocol): LedgerHasTokenRow => ({
+    slug: p.slug,
+    name: p.name,
+    category: p.category,
+    tvl_usd: p.tvl_usd,
+    mcap_usd: p.mcap_usd,
+    gecko_id: p.gecko_id,
+    symbol: p.symbol,
+    group: p.mcap_usd !== null && p.mcap_usd > 0 ? 'with_mcap' : p.mcap_usd !== null ? 'dead_token' : 'parent_token',
+  });
+  const withMcap: LedgerHasTokenRow[] = [];
+  const dead: LedgerHasTokenRow[] = [];
+  const parent: LedgerHasTokenRow[] = [];
+  for (const p of snapshot.protocols) {
+    if (isPreToken(p)) continue;
+    const row = toLedgerRow(p);
+    if (row.group === 'with_mcap') withMcap.push(row);
+    else if (row.group === 'dead_token') dead.push(row);
+    else parent.push(row);
+  }
+  const byTvl = (a: LedgerHasTokenRow, b: LedgerHasTokenRow): number => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1);
+  withMcap.sort(byTvl);
+  dead.sort(byTvl);
+  parent.sort(byTvl);
+  const total = snapshot.protocols.length;
+  const ranked = board.length;
+  const excludedTotal = excluded.length;
+  const hasTokenTotal = withMcap.length + dead.length + parent.length;
+  return {
+    total,
+    ranked,
+    excluded_total: excludedTotal,
+    has_token_total: hasTokenTotal,
+    census_line: `${total} = ${ranked} ranked + ${excludedTotal} excluded + ${hasTokenTotal} with a token`,
+    excluded: {
+      total: excludedTotal,
+      category_screen: classes.category_screen,
+      name_rules: classes.name_rules,
+      stablecoin: classes.stablecoin,
+      by_category,
+      rows: excluded,
+    },
+    has_token: {
+      total: hasTokenTotal,
+      with_mcap: { count: withMcap.length, rows: withMcap },
+      dead_token: { count: dead.length, rows: dead },
+      parent_token: {
+        count: parent.length,
+        symbol_only: parent.filter((r) => r.symbol !== null && r.gecko_id === null).length,
+        gecko_present: parent.filter((r) => r.gecko_id !== null).length,
+        rows: parent,
+      },
+    },
+  };
+}
+
+/** The farm-method summary for data.js: formula, assumption, thresholds and verdict counts. */
+export function buildFarmMethod(board: BoardRow[]): FarmMethod {
+  const counts = { farm: 0, thin: 0, skip: 0 };
+  for (const r of board) {
+    if (r.farm_verdict === 'FARM') counts.farm++;
+    else if (r.farm_verdict === 'THIN') counts.thin++;
+    else counts.skip++;
+  }
+  const nets = board.map((r) => r.farm_net_at_plan_usd).sort((a, b) => a - b);
+  const mid = Math.floor(nets.length / 2);
+  const medianNet = nets.length % 2 === 1 ? nets[mid]! : (nets[mid - 1]! + nets[mid]!) / 2;
+  const nonNegative = board.filter((r) => r.farm_net_at_plan_usd >= 0).length;
+  return {
+    formula: 'Break-even deposit D* = gas x TVL / expected value: a deposit D holds D/TVL of the protocol, so its expected claim is D x EV / TVL, and net = 0 solves to D* = gas x TVL / EV.',
+    assumption: 'Pro-rata share of the FULL implied launch value: a generous upper bound on the claim (a real airdrop pool is a fraction of token supply), so D* is a lower bound on the true break-even deposit and the verdicts are optimistic, not conservative.',
+    thresholds: 'FARM if D* is at most twice the plan deposit; THIN if more than twice and at most 10x the plan deposit; SKIP if more than 10x the plan deposit or token odds below 1%. Capital is TVL-tiered ($250/$150/$100/$50), never flat.',
+    counts,
+    net_at_plan_usd: { min: nets[0]!, median: Math.round(medianNet * 100) / 100, max: nets[nets.length - 1]! },
+    net_non_negative_rows: nonNegative,
+    note: `Expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(nets[nets.length - 1]!).toFixed(2)}), so no row is FARM at its plan deposit as written; FARM means the break-even deposit is within doubling distance of the plan deposit.`,
+  };
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model);
@@ -1379,6 +1849,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const peers = peerMultiples(snapshot, model);
   const curve = fitSizeCurve(snapshot);
   const heldout = looValueHeldOut(snapshot, model);
+  const cohort = cohortCheck(snapshot, model);
+  const ledger = buildLedger(snapshot, board);
+  const farmMethod = buildFarmMethod(board);
   // The odds fit is recomputed here for serialisation: the fit is deterministic gradient
   // descent on this snapshot, so this is the same fit buildBoard already used for the rows.
   const oddsFit = fitTokenOdds(snapshot, model);
@@ -1409,6 +1882,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     global_multiple: round4(peers.global),
     size_curve: curve,
     heldout,
+    cohort_check: cohort,
+    ledger,
+    farm_method: farmMethod,
     rank_range_method: rankRangeMethod(model),
     odds_fit: serialiseOddsFit(oddsFit),
     peers: peerTable,

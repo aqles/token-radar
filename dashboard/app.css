@@ -117,9 +117,34 @@ tbody tr.selected { background: var(--surface2); }
 .detail li .time { color: var(--muted); }
 
 .live td.num, .live th.num { text-align: right; }
-.excluded table { font-size: 13.5px; }
-.excluded td { white-space: normal; }
-.excluded .reason { color: var(--muted); }
+
+/* KPI strip + ledger census line, above the fold. */
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; font-size: 13.5px; display: flex; flex-wrap: wrap; gap: 4px 22px; margin-bottom: 10px; }
+.kpi b { color: var(--accent); }
+.kpi-census { color: var(--muted); }
+.kpi-census b { color: var(--text); }
+
+/* Farm verdict badges: board column, detail banner. */
+.fbadge { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; vertical-align: 1px; }
+.fb-farm { background: var(--green); color: #06130c; }
+.fb-thin { background: var(--accent); color: #191204; }
+.fb-skip { background: #3a4350; color: #c6cdd8; }
+.fbe { font-variant-numeric: tabular-nums; }
+.farm-verdict { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; margin: 0 0 16px; }
+.farm-verdict .fbadge { font-size: 12px; padding: 2px 9px; }
+
+/* Top-5 EV strip: EV order is labelled on the cards; the EV #1 card leads. */
+.top5ev { color: var(--green); font-weight: 700; font-size: 13px; }
+.top5card.lead { border-color: var(--accent); }
+
+/* Ledger: full 758/758 accounting, filterable, scrollable. */
+.ledger label { color: var(--muted); font-size: 13px; }
+.ledger select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 14px; }
+.ledger-table { max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+.ledger-table table { font-size: 13.5px; }
+.ledger-table td { white-space: normal; }
+.ledger-table .reason { color: var(--muted); }
+.ledger-table .count { margin: 10px 12px 0; }
 
 footer { border-top: 1px solid var(--border); padding: 18px 28px 26px; color: var(--muted); font-size: 13px; }
 footer p { margin: 0; }
