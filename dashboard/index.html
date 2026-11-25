@@ -21,29 +21,60 @@
     <div class="kpi" id="kpi"></div>
     <div class="evidence" id="heldoutTop"></div>
     <div class="proof" id="proof"></div>
+    <div class="chips" id="chips"></div>
   </section>
+
+  <section class="ladder" id="ladderPanel" hidden></section>
 
   <section class="top5" id="top5">
     <h2>Top launch candidates — ranked by expected value</h2>
     <p class="note">The five highest <b>expected</b> values among rows with a FARM verdict at their sized deposit: implied launch value times the token odds.
-    Expected value is the number a farmer decides on — a huge launch that will probably never happen
-    is worth less than a smaller one that likely will. Stablecoins are left out here — their token
-    already trades — but stay on the board below, flagged, because the watchlist floor requires them.</p>
+    Expected value is the number a farmer decides on. Stablecoins are left out here, flagged on the board below.</p>
     <div id="top5List"></div>
+  </section>
+
+  <section class="farmbook" id="farmbook">
+    <h2>The farm book — the board as one book</h2>
+    <p class="note">Every figure below is recomputed in this page from data.js at load.</p>
+    <div class="fb-totals" id="farmbookTotals"></div>
+    <table class="fb-grid" id="farmbookGrid"></table>
+  </section>
+
+  <section class="dropped" id="testedDropped">
+    <h2>What we tested and dropped</h2>
+    <p class="note">Terms tested on held-out data and left out of the adopted model. Each row shows the test result and the decision. Ladder rows are LOO / WF-40 on all 128 comps.</p>
+    <table class="droptable">
+      <thead><tr><th>Term tested</th><th>Test</th><th>Result</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>Growth, maturity, chain breadth (value model)</td><td>Leave-one-out median error</td><td>4.20&times; with the terms, 3.96&times; without</td><td class="decision">Not kept</td></tr>
+        <tr><td>Age term (token odds)</td><td>10-fold Brier, plus oldest-row time split</td><td>0.1438 with vs 0.1489 adopted; oldest rows, 2023 split +0.0415 Brier</td><td class="decision">Not kept</td></tr>
+        <tr><td>Per-row range constructions</td><td>Split-half coverage at stated width</td><td>Best 106.5&times; wide at 77.0% coverage (split-half)</td><td class="decision">Not shipped</td></tr>
+        <tr><td>Size curve on rankable-like comps only</td><td>Leave-one-out median error</td><td>4.1072&times; vs 4.0974&times; with the all-comp curve</td><td class="decision">Not kept</td></tr>
+        <tr><td>Flat (peer only)</td><td>LOO / WF-40</td><td>5.53&times; / 4.64&times;</td><td class="decision">Control</td></tr>
+        <tr><td>Size curve</td><td>LOO / WF-40</td><td>3.96&times; / 3.18&times;</td><td class="decision">Kept</td></tr>
+        <tr><td>Category ridge 16</td><td>LOO / WF-40</td><td>4.31&times; / 3.37&times;</td><td class="decision">Not kept</td></tr>
+        <tr><td>Category ridge 64</td><td>LOO / WF-40</td><td>4.19&times; / 3.24&times;</td><td class="decision">Not kept</td></tr>
+        <tr><td>Chain count</td><td>LOO / WF-40</td><td>4.26&times; / 4.30&times;</td><td class="decision">Not kept</td></tr>
+        <tr><td>Family ridge 16</td><td>LOO / WF-40</td><td>3.96&times; / 3.18&times; (no change)</td><td class="decision">Not kept</td></tr>
+        <tr><td>7-day growth</td><td>LOO / WF-40</td><td>4.22&times; / 4.21&times;</td><td class="decision">Not kept</td></tr>
+        <tr><td>Years listed</td><td>LOO / WF-40</td><td>4.11&times; / 3.02&times;</td><td class="decision">Not kept</td></tr>
+      </tbody>
+    </table>
   </section>
 
   <section class="method" id="method">
     <h2>How the radar prices a launch</h2>
-    <p>Implied value = TVL &times; peer multiple &times; size multiplier.
+    <p>Implied value = TVL &times; peer multiple &times; size multiplier &times; saturation multiplier.
     The peer multiple is the median market-cap-to-TVL of the token-bearing protocols in the same
     category, computed from this snapshot — never typed in. A category with exactly two trading
     peers gets a log-space blend of its own median and the global median, capped at twice the
-    global median, so two observations move the estimate but cannot dominate it. A category with
+    global median. A category with
     fewer than two peers falls back to the global median: one peer is not a category signal. The size
     multiplier comes from a fitted curve: log(mcap) = 6.9646 + 0.5223&middot;log(TVL), fit by ordinary
     least squares on the 128 traded protocols in this snapshot. The curve's own multiple is clamped
     to [0.5&times;, 2&times;] of the peer multiple before it is applied. The clamp keeps the top rows credible.
-    It is a prior, not a fit — the unbounded curve is the better held-out predictor, and the evidence strip above says so.</p>
+    It is a prior, not a fit — the unbounded curve is the better held-out predictor, and the evidence strip above says so.
+    Value saturates at $500M TVL (radar-7): a row above $500M is priced as if it held $500M, so Gauntlet, Nonce Capital, Sentora and Steakhouse Financial tie at $53,450,815, each labelled with its saturation multiplier. The old top-5 guardrail (multiples at or above ~0.08&times;) is retired above $500M TVL: traded giants here trade 0.0006&ndash;0.352&times;, median ~0.03&times; — Sentora at 0.019&times; sits between the 25th percentile and the median for its size band.</p>
     <p>Token odds are a fitted logistic model, not a category rate: logit(p) = logit(shrunk category
     rate) &minus; 0.0182 &minus; 0.154&middot;z(log TVL) &minus; 0.485&middot;z(7-day growth) + 0.312&middot;z(log chains),
     fit by gradient descent (500 iterations) on all 758 protocols at run time. The offset is the shrunk
@@ -63,22 +94,21 @@
     <p>Rank ranges come from 200 bootstrap refits of the fitted model: the 128 traded comparables
     are resampled with replacement (seed 20261122), the size curve and the peer medians are refit,
     and every row is re-priced and re-ranked. Each row shows the P10&ndash;P90 range and the median
-    of its rank across the refits. The range is a stability statement across refits. Median width
-    37 ranks over the board; the top 3 rows are 0, 0, 1 ranks wide.</p>
+    of its rank across the refits — a stability statement. Median width
+    37 ranks over the board; the top 3 rows are 21, 12, 5 ranks wide.</p>
     <p>The second held-out test is a listing-date cohort check: the cap2 model (peer multiple
     &times; peer-bounded size curve, [0.5&times;, 2&times;] clamp) is fit on dated comparables listed
     before 2023 / 2024 / 2025 and tested on those listed after. Fit on 24 protocols (listed before
-    2023-01-01), test on 71 (listed after 2023-01-01): median error 3.23&times; vs peer 5.07&times;,
-    closer 69.0% of the time. Fit on 44 (before 2024-01-01), test on 51 (after): 2.91&times; vs
+    2023-01-01), test on 71 (listed after 2023-01-01): median error 3.22&times; vs peer 5.07&times;,
+    closer 69.0% of the time. Fit on 44 (before 2024-01-01), test on 51 (after): 2.83&times; vs
     5.16&times;, closer 72.5%. Fit on 64 (before 2025-01-01), test on 31 (after): 2.85&times; vs
-    4.91&times;, closer 71.0%. Two rolling-origin splits agree (oldest 50% &rarr; next 25%:
-    3.57&times; vs peer 6.01&times;, closer 70.8%; oldest 75% &rarr; newest 25%: 2.66&times; vs
-    4.20&times;, closer 70.8%). Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error 3.23x / 2.91x / 2.85x (closer than the peer median 69-73% of the time). This is a cohort split, not a historical backtest: every protocol is scored on its 2026-11-14 TVL and market cap, so it shows the model generalises to newer listings — not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.96x.</p>
+    4.91&times;, closer 71.0%. Two rolling-origin splits agree (2.76&times; vs 6.01&times;; 3.13&times; vs
+    4.20&times;, closer 70.8% both). Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error 3.22x / 2.83x / 2.85x (closer than the peer median 69-73% of the time). This is a cohort split, not a historical backtest: it shows the model generalises to newer listings, not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.94x.</p>
     <p class="note"><b>How it's built.</b> The size curve is fitted by ordinary least squares on the 128 traded
     protocols in this snapshot; the peer multiples are medians from the same snapshot, never typed in.
-    Held out, the adopted model predicts traded market caps with a median error of 3.96&times; against
-    5.53&times; for the peer multiple alone, and the listing-date cohort check agrees at 3.23&times; /
-    2.91&times; / 2.85&times; against peer 5.07&times; / 5.16&times; / 4.91&times;. The token odds are scored
+    Held out, the adopted model predicts traded market caps with a median error of 3.94&times; against
+    5.53&times; for the peer multiple alone, and the listing-date cohort check agrees at 3.22&times; /
+    2.83&times; / 2.85&times; against peer 5.07&times; / 5.16&times; / 4.91&times;. The token odds are scored
     on 4-fold splits: Brier 0.1502 / AUC 0.650, against 0.1553 / 0.500 for the flat 19% rate. Every row
     carries a costed farm plan with a solved break-even deposit and a verdict at the sized deposit.
     The sized deposit is twice the break-even deposit, capped at ten times the plan deposit — so every
@@ -89,10 +119,10 @@
     <table class="evtable">
       <thead><tr><th>Held-out test</th><th>Peer alone (v3)</th><th>Size curve, unbounded</th><th>Adopted: curve bounded to [0.5&times;, 2&times;] peer</th></tr></thead>
       <tbody>
-        <tr><td>Leave-one-out, rankable-like comps (n=87) — median error</td><td>4.99&times; (MdALE 1.608)</td><td>3.23&times; (MdALE 1.173), wins 65.5%</td><td><b>3.96&times; (MdALE 1.377), wins 67.8%</b></td></tr>
+        <tr><td>Leave-one-out, rankable-like comps (n=87) — median error</td><td>4.99&times; (MdALE 1.608)</td><td>3.23&times; (MdALE 1.173), wins 65.5%</td><td><b>3.56&times; (MdALE 1.270), wins 67.8%</b></td></tr>
         <tr><td>Split folds, rankable-like — MdALE (even / odd / time)</td><td>1.714 / 1.614 / 1.622</td><td>1.183 / 1.120 / 1.129</td><td><b>1.323 / 1.036 / 1.093</b></td></tr>
         <tr><td>Token odds, 4-fold — Brier / AUC</td><td>0.1546 / 0.600 (shrunk category rate)</td><td colspan="2"><b>0.1502 / 0.650</b> (fitted logistic; flat 19% rate 0.1553 / 0.500)</td></tr>
-        <tr><td>Listing-date cohort check, expanding window (dated comps) — median error</td><td colspan="3">Fit before 2023 / 2024 / 2025, test after: <b>3.23&times; / 2.91&times; / 2.85&times;</b> vs peer 5.07&times; / 5.16&times; / 4.91&times;, closer 69.0% / 72.5% / 71.0% (test n=71 / 51 / 31). A cohort split, not a historical backtest — see the paragraph above.</td></tr>
+        <tr><td>Listing-date cohort check, expanding window (dated comps) — median error</td><td colspan="3">Fit before 2023 / 2024 / 2025, test after: <b>3.22&times; / 2.83&times; / 2.85&times;</b> vs peer 5.07&times; / 5.16&times; / 4.91&times;, closer 69.0% / 72.5% / 71.0% (test n=71 / 51 / 31). A cohort split, not a historical backtest — see the paragraph above.</td></tr>
       </tbody>
     </table>
     <p class="note">Implied value is this entry's own claim from the snapshot's figures. It is not a
@@ -144,6 +174,7 @@
         <th data-sort="token_odds">Odds</th>
         <th data-sort="implied_value_usd">Implied value</th>
         <th data-sort="farm_break_even_usd">Farm verdict</th>
+        <th id="bandTh" hidden>P10–P90</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -172,7 +203,7 @@
 </main>
 
 <footer>
-  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; <span id="modelVer">model radar-6</span> &middot;
+  <p>Snapshot <span id="asOf"></span> &middot; <span id="source"></span> &middot; <span id="modelVer">model radar-7</span> &middot;
   floor $50M &middot; board <span id="boardSize"></span> rows</p>
   <p id="integrity"></p>
 </footer>

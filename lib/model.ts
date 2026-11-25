@@ -1,42 +1,55 @@
-// Token launch radar, model radar-6: fitted size curve + category peer prior + fitted odds.
+// Token launch radar, model radar-7: fitted size curve + category peer prior + fitted odds,
+// with the value saturated at $500M TVL.
 //
-// radar-6 is a MODEL round on the radar-5 package: the fitted curve, the peer rule, the
-// [0.5x, 2x] clamp, the odds fit, the board membership, the ledger, the cohort check and
-// the farm steps are all UNCHANGED. What radar-6 changes, all computed from the snapshot
-// at run time (see scratch/v6-model-evidence.md for the numbers behind each decision):
-// (a) the value model DROPS the growth / maturity / chains sensitivities: on held-out
-// comparables the full formula scores median error 4.2025x (all comps) / 4.0974x
-// (rankable-like) against 3.9599x / 3.9663x for the peer x bounded-size-curve multiple
-// alone, and wins 0.6484 / 0.6552 vs 0.6719 / 0.6782 — the terms do not earn their
-// place, so implied = TVL x peer x size multiplier and the three multipliers ship as
-// 1.00 (retained as fields so the dashboard's re-derivation and model cells stay valid;
-// the dashboard must present them as dropped, not as live signals). Dropping them also
-// aligns the board with its advertised held-out number: the LOO test always scored the
-// multiple alone, while the v5 board was priced with the terms (4.20x held-out).
-// (b) the farm verdict is computed AT A SIZED DEPOSIT: S = min(2 x D*, 10 x plan
-// deposit), twice the break-even deposit capped at ten times the TVL-tiered plan
-// deposit, so S <= $2,500. FARM if S reaches 2 x D* within the cap, THIN if S is
-// capped but net at S is still positive, SKIP if net at S is <= 0 or odds < 0.01.
-// On this snapshot: 70 FARM / 61 THIN / 63 SKIP. The rule alone, on the v5 board,
-// would have given 49/47/98 with the SKIP set identical to v5's; the radar-6 counts
-// differ because the term drop (a) raised implied values and EV, so D* fell and 35
-// v5 SKIP rows moved up to THIN/FARM — all 7 v5 FARM rows stay FARM, and every FARM
-// row has positive expected net at its sized deposit by construction (exactly one gas
-// bill, median +$17.02). Expected net at the PLAN deposit is negative on 193 of 194
-// rows — one row, anemoy-capital (#78), breaks even at its plan deposit (+$4.83)
-// after the term drop nearly doubled its implied value (its v5 terms were 0.53x
-// combined). That finding is kept in the data, not hidden. Sentora (#1) stays SKIP.
-// (c) the token-odds age term was TESTED and REJECTED (see evidence §3): an age +
-// undated-indicator model wins 10-fold (Brier 0.1438 / AUC 0.675 vs adopted 0.1489 /
-// 0.650) and wins every forward window in aggregate, but by test-row age bucket it
-// LOSES on old rows (+0.0415 Brier on >1095d rows in the 2023 forward split, the only
-// forward window with old test rows) while winning on very young rows (-0.043 on
-// <180d). The board is old no-token survivors, so the term does not earn its place
-// there; the positive age slope is exposure time (cumulative incidence), not launch
-// hazard, exactly as the radar-5 rationale held. The odds model is UNCHANGED.
-// (d) interval constructions were tested again and the value-band question stays
-// CLOSED (see evidence §5): the best honest band at >=75% coverage is still 100x+
-// wide; rank ranges widened to P5-P95 / P2.5-P97.5 still cover far below 75%.
+// radar-7 is a MODEL round on the radar-6 package: the fitted curve, the peer rule, the
+// [0.5x, 2x] clamp, the odds fit, the board membership, the ledger, the cohort check, the
+// farm steps and the sized-deposit farm rule are all UNCHANGED. What radar-7 changes, all
+// computed from the snapshot at run time (see scratch/v7-model-evidence.md for the numbers
+// behind each decision):
+// (a) the value model SATURATES at $500M TVL: implied(TVL) is the peer x peer-bounded
+// size-curve value evaluated at min(TVL, $500M), so a row above $500M TVL is priced as
+// if it held $500M. The saturation ships as one more multiplier on the row
+// (saturation_multiplier, 1.00 at or below $500M), so the dashboard's re-derivation
+// (TVL x peer x size x growth x maturity x chains x saturation) keeps working and the
+// capped rows are labelled, not hidden. Why: the uncapped model over-predicts large
+// comparables (v5 tercile bias +0.573 log on large comps), and the saturation is the
+// only P2 variant that improves held-out error on EVERY blind test at once — LOO
+// 3.9599x -> 3.9417x (all comps), 3.9663x -> 3.5600x (rankable-like), 4.1046x ->
+// 3.7665x (winners' n=92 population); WF-40 3.1781x -> 2.9446x, 3.3300x -> 2.8140x,
+// 3.1756x -> 2.8541x; cohort-split means improve on all six expanding splits. The
+// $500M threshold is the only one of $100M / $250M / $500M / $750M / $1B / $1.5B /
+// $2B tested that improves LOO on all three populations at once. The level follows:
+// top implied $294.8M -> $70.3M (bitfi-basis, unchanged: TVL below $500M), board total
+// $2.78B -> $2.11B; farm verdicts re-derive under the same rule, 70/61/63 -> 70/60/64.
+// (b) the P1 term ladder FAILED and ships nothing (see evidence section 2): replicating
+// kevin's 8-row ladder (flat -> size curve -> category ridge 16/64 -> chain count ->
+// family -> 7-day growth -> years listed) on our data, each row scored on LOO + WF-40
+// on n=128 / n=87 / n=92, keeps NO term under either kevin's rule (both misses
+// together fall >=1%) or kiencx's rule (both fall). The fitted slopes are noise
+// (chain t=0.27, growth t=-0.76, years t=0.13); the category ridge refits noise on top
+// of a peer that already IS the category median; the family term is a near no-op (127
+// of 128 comps have a unique first word). The same failure holds on kevin's own global
+// base and under joint OLS fitting. The winners' ladder gains were already harvested
+// by our peer rule: their base has no category term, ours does. The v6 model (peer x
+// bounded size curve) stands as the base.
+// (c) the P2 level variants that do NOT ship (see evidence section 3): flatter size
+// exponents (slope 0.49 / 0.44 / 0.40) improve LOO slightly but move NO board row at
+// the top — the top rows are clamp-floor-bound (peer x 0.5), so the slope cannot lower
+// them — and are not kept; lower clamps (1.5x, tiered, giants-only) RAISE the top,
+// because the giants sit on the clamp FLOOR (1/cap), so tightening the cap lifts the
+// floor: rejected (LOO 4.80x / 4.48x for the global 1.5x cap); restoring one v5/v6
+// discount term (growth / maturity / chains alone) costs LOO on n=128 in all three
+// cases: rejected.
+// (d) the value-band question stays CLOSED (see evidence section 4): the honest
+// split-half P10-P90 band covers 71-78% (bar: >=70%) but is 106-174x wide (bar:
+// <=20x); P3 ships no band. The P25-P75 band is 12-16x wide at ~50% honest coverage,
+// as stated — recorded here, not shipped as an 80% band.
+// (e) the old top-5 credibility guardrail (multiples >= ~0.08x) is RETIRED for giants:
+// its premise was wrong. Traded multiples for TVL >= $1B comparables run 0.0006x-0.35x
+// (median 0.0295x, p25 0.0144x, n=14); the field prices Sentora at 0.007-0.012x. The
+// saturated Sentora at 0.019x sits between p25 and the median for its size band —
+// typical for a $1B+ protocol, not incredible. Only the six rows above $500M TVL fall
+// below 0.08x, all by the saturation, all labelled.
 // The clamp stays 2x. The category screen stays. No walk-forward claim is made.
 //
 // Break-even deposit (per row, see farmBreakEvenDeposit): a farmer depositing D into a protocol
@@ -54,9 +67,10 @@
 // (D* <= 5 x plan): expected net at S is then exactly one gas bill by construction, positive
 // on every FARM row. THIN if S is capped at 10 x plan but net at S is still positive. SKIP if
 // net at S is <= 0 (D* > 10 x plan) or token odds < 0.01. On this snapshot that gives 70 FARM /
-// 61 THIN / 63 SKIP (v5, judged at the plan deposit, gave 7/89/98). The rule alone, applied to
+// 60 THIN / 64 SKIP (v5, judged at the plan deposit, gave 7/89/98). The rule alone, applied to
 // the v5 board, would have given 49/47/98 with the SKIP set identical to v5's; the radar-6
-// counts differ because the term drop raised implied values and EV, so D* fell on most rows.
+// counts differ because the term drop raised implied values and EV, so D* fell on most rows;
+// radar-7's saturation lowers the giants' implied values again, moving one THIN row to SKIP.
 // Expected net at the PLAN deposit is negative on 193 of 194 rows — one row,
 // anemoy-capital (#78), breaks even at its plan deposit (+$4.83) after the term drop nearly
 // doubled its implied value (its v5 terms were 0.53x combined). The verdict is a
@@ -102,17 +116,22 @@
 //              (this snapshot: b = 0.52, so the multiple falls as protocols get bigger). The
 //              curve's multiple is clamped to [0.5x, 2x] of the peer multiple: the unbounded
 //              curve is the best held-out predictor of traded market caps (median error 3.2x vs
-//              5.0x for the peer alone), but it prices the $2.75B giants at 0.03x TVL, below
-//              every multiple a $1-3B protocol actually trades at in the credible band, so the
-//              peer bound keeps the top rows credible (Sentora 0.10x, not 0.03x) at a measured
-//              cost (median error 4.0x instead of 3.2x). A single global curve was rejected in
-//              v3 for crushing giants; the peer-bounded curve is the fix, not a repeat.
+//              5.0x for the peer alone). A single global curve was rejected in v3 for
+//              crushing giants; the peer-bounded curve is the fix, not a repeat. The bound
+//              alone still over-predicts the largest comparables (v5 tercile bias +0.573 log),
+//              so radar-7 saturates the value at $500M TVL (see saturation, below): a row
+//              above $500M TVL is priced as if it held $500M.
 //   growth   = clamp(change_7d, -60, 120); mapped through a signed log so one +4,448% week
 //              cannot explode a row: growthMult = 1 + 0.5 * sign(g) * ln(1+|g|) / ln(121)
 //   maturity = 0.7 + 0.3 * min(age_days, 1095) / 1095 (age unknown: 365 days); age saturates,
 //              so being old alone never carries a row
 //   chains   = 1 + 0.02 * min(chains - 1, 5), capped at +10%
-//   implied  = max(1, round(tvl_usd * peer * sizeMult))
+//   saturation = 1.00 at or below $500M TVL; above it, the factor that prices the row
+//              as if it held $500M: saturation = implied($500M) / implied(TVL), in (0, 1].
+//              The threshold is the only one of $100M / $250M / $500M / $750M / $1B /
+//              $1.5B / $2B tested that improves LOO on all three populations at once
+//              (see the header and scratch/v7-model-evidence.md section 3).
+//   implied  = max(1, round(tvl_usd * peer * sizeMult * saturationMult))
 //
 // Growth, maturity and chains were DISCLOSED SENSITIVITIES through radar-5, not fitted
 // value factors: on the traded comparables they did not improve the held-out prediction
@@ -123,10 +142,13 @@
 // 4.2025x on held-out comparables against 3.9599x for the multiple alone (4.0974x vs
 // 3.9663x on rankable-like comps), and wins 0.6484 vs 0.6719 (0.6552 vs 0.6782) — the
 // terms actively hurt held-out prediction, so the simpler model is adopted (see
-// scratch/v6-model-evidence.md §4). The multipliers still ship as 1.00 on every row so
-// the dashboard's re-derivation (TVL x peer x size x growth x maturity x chains) keeps
-// working; the dashboard must present them as dropped, not as live signals. The 7-day
-// change itself is still carried on the row (growth_pct) as data, and the odds model
+// scratch/v6-model-evidence.md §4). Radar-7 re-tested restoring each term alone
+// (growth / maturity / chains): all three cost LOO on all comps (4.3257x / 4.0101x /
+// 4.2699x vs 3.9599x multiple-only) and are rejected again (see
+// scratch/v7-model-evidence.md section 3). The multipliers still ship as 1.00 on every row so
+// the dashboard's re-derivation (TVL x peer x size x growth x maturity x chains x
+// saturation) keeps working; the dashboard must present them as dropped, not as live
+// signals. The 7-day change itself is still carried on the row (growth_pct) as data, and the odds model
 // still uses the 7-day change as a covariate. Per-category size slopes were tested and
 // rejected (held-out win rates 0-35%: noise), as were damped curves (they over-predict
 // large protocols by 2.8-3.8x) and shrunk category offsets on the curve (no consistent
@@ -198,6 +220,9 @@ export interface ModelConstants {
   chain_max_extra: number;
   /** How far the fitted size curve may move a row from its peer multiple, each way. */
   size_cap_mult: number;
+  /** TVL above which the implied value is saturated: a row above this TVL is priced
+   * as if it held exactly this TVL (radar-7). */
+  saturation_tvl_usd: number;
   /** Gradient-descent iterations for the token-odds logistic fit (converged by 300). */
   odds_gd_iters: number;
   /** Gradient-descent learning rate for the token-odds logistic fit. */
@@ -224,6 +249,7 @@ export const MODEL: ModelConstants = {
   chain_step: 0.02,
   chain_max_extra: 0.1,
   size_cap_mult: 2,
+  saturation_tvl_usd: 500_000_000,
   odds_gd_iters: 500,
   odds_gd_lr: 0.5,
   rank_range_b: 200,
@@ -231,7 +257,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-6';
+export const MODEL_VERSION = 'radar-7';
 
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -424,6 +450,9 @@ export interface BoardRow {
     growth_multiplier: number;
     maturity_multiplier: number;
     chain_multiplier: number;
+    /** The saturation factor actually applied: 1.00 at or below $500M TVL, below 1
+     * above it (the row is priced as if it held $500M). */
+    saturation_multiplier: number;
     age_days: number | null;
     /** P10 of this row's rank across the rank-range bootstrap refits (1 = top). */
     rank_lo: number;
@@ -477,6 +506,9 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  /** The saturation factor actually applied: 1.00 at or below $500M TVL, below 1
+   * above it (the row is priced as if it held $500M). */
+  saturation_multiplier: number;
   /** P10 of this row's rank across the rank-range bootstrap refits (1 = top). */
   rank_lo: number;
   /** P90 of this row's rank across the rank-range bootstrap refits. */
@@ -579,11 +611,11 @@ export interface OddsFitData {
 export interface HeldOut {
   /** Token-bearing comparables in the leave-one-out test. */
   n_comps: number;
-  /** Median |predicted / actual| for the radar-6 value multiple (peer x bounded size curve). */
+  /** Median |predicted / actual| for the radar-7 value multiple (peer x bounded size curve, saturated at $500M TVL). */
   median_error_x: number;
   /** Median |predicted / actual| for the v3 peer multiple alone, on the same folds. */
   peer_median_error_x: number;
-  /** Share of held-out comparables the radar-6 multiple predicts closer than the peer alone. */
+  /** Share of held-out comparables the radar-7 multiple predicts closer than the peer alone. */
   win_rate_vs_peer: number;
 }
 
@@ -940,9 +972,9 @@ export function sizeCurveMultiple(curve: SizeCurve | null, tvlUsd: number, model
  * The size factor a row actually gets: the curve's multiple over the peer multiple, clamped
  * to [1/size_cap_mult, size_cap_mult]. The peer is the prior and the curve is the evidence;
  * the bound says the evidence may move a row at most one doubling from its category peer.
- * On this snapshot the bound is what keeps the $2.75B giants credible: the unbounded curve
- * prices Sentora at 0.03x TVL, the bound at 0.10x. Returns the raw curve multiple too, so the
- * board shows both the fit and the factor it applied.
+ * Returns the raw curve multiple too, so the board shows both the fit and the factor it
+ * applied. (Radar-7 note: the bound alone still over-predicts the largest comparables;
+ * the saturation in saturationMultiplier is what caps the giants — see below.)
  */
 export function sizeMultiplierFor(
   tvlUsd: number,
@@ -958,13 +990,45 @@ export function sizeMultiplierFor(
 }
 
 /**
+ * The saturation factor (radar-7): 1 at or below model.saturation_tvl_usd ($500M); above
+ * it, the factor that prices the row as if it held exactly $500M TVL. It is the ratio of
+ * the peer x peer-bounded size-curve value evaluated at the saturation TVL to the same
+ * value evaluated at the row's own TVL, so it is exact by construction — the saturated
+ * implied value of a row above the threshold equals the implied value of a row with the
+ * same peer at $500M TVL. The ratio is clamped to (0, 1]: the bounded size multiple is
+ * non-increasing in TVL on this snapshot (curve slope 0.5223 < 1), so the ratio should
+ * never exceed 1, but the clamp keeps the factor a discount even if a future snapshot
+ * fitted a slope above 1. With a null curve the factor is 1 (no curve, nothing to
+ * saturate). Why $500M: it is the only threshold of $100M / $250M / $500M / $750M /
+ * $1B / $1.5B / $2B tested that improves LOO on all three populations at once
+ * (3.9599x -> 3.9417x all comps, 3.9663x -> 3.5600x rankable-like, 4.1046x -> 3.7665x
+ * on the winners' n=92 population; see scratch/v7-model-evidence.md section 3).
+ */
+export function saturationMultiplier(
+  tvlUsd: number,
+  peerMultiple: number,
+  curve: SizeCurve | null,
+  model: ModelConstants = MODEL,
+): number {
+  if (tvlUsd <= model.saturation_tvl_usd) return 1;
+  if (curve === null) return 1;
+  const sat = sizeMultiplierFor(model.saturation_tvl_usd, peerMultiple, curve, model);
+  const own = sizeMultiplierFor(tvlUsd, peerMultiple, curve, model);
+  const impliedSat = model.saturation_tvl_usd * peerMultiple * sat.multiplier;
+  const impliedOwn = tvlUsd * peerMultiple * own.multiplier;
+  if (impliedOwn <= 0 || !Number.isFinite(impliedSat / impliedOwn)) return 1;
+  return Math.min(1, Math.max(0, impliedSat / impliedOwn));
+}
+
+/**
  * The value model's own held-out test, recomputed at run time: leave-one-out over the
  * token-bearing comparables. Each comparable is held out once, the peer table and the size
- * curve are refit on the rest, and the radar-6 multiple (peer x peer-bounded size curve) is
- * scored against the v3 peer multiple alone on the held-out market cap. Median error is
- * exp(median |log(pred / actual)|), the median factor by which the prediction is off.
- * No growth, maturity or chain terms enter this test: it tests the multiple, and those terms
- * are disclosed sensitivities, not fitted value factors.
+ * curve are refit on the rest, and the radar-7 multiple (peer x peer-bounded size curve,
+ * saturated at $500M TVL) is scored against the v3 peer multiple alone on the held-out
+ * market cap. Median error is exp(median |log(pred / actual)|), the median factor by
+ * which the prediction is off. No growth, maturity or chain terms enter this test: it
+ * tests the multiple, and those terms are disclosed sensitivities, not fitted value
+ * factors.
  */
 export function looValueHeldOut(snapshot: Snapshot, model: ModelConstants = MODEL): HeldOut {
   const comps = sizeComps(snapshot);
@@ -978,7 +1042,8 @@ export function looValueHeldOut(snapshot: Snapshot, model: ModelConstants = MODE
     const curve = fitSizeCurve(train);
     const peer = peerMultipleFor(held.category, peers, model).multiple;
     const size = sizeMultiplierFor(held.tvl_usd, peer, curve, model);
-    const pred4 = Math.max(1, held.tvl_usd * peer * size.multiplier);
+    const saturationMult = saturationMultiplier(held.tvl_usd, peer, curve, model);
+    const pred4 = Math.max(1, held.tvl_usd * peer * size.multiplier * saturationMult);
     const predPeer = Math.max(1, held.tvl_usd * peer);
     err4.push(Math.abs(Math.log(pred4 / held.mcap_usd!)));
     errPeer.push(Math.abs(Math.log(predPeer / held.mcap_usd!)));
@@ -1003,8 +1068,9 @@ const round2 = (n: number): number => Math.round(n * 100) / 100;
 /**
  * One cohort split scored under the cap2 model: the peer table and the size curve are fit on
  * `trainComps` only, and every `testComps` row is predicted as TVL x peer x peer-bounded size
- * curve (no growth, maturity or chain terms — the same multiple looValueHeldOut tests).
- * Returns the median errors and the win rate vs the peer multiple alone.
+ * curve, saturated at $500M TVL (no growth, maturity or chain terms — the same multiple
+ * looValueHeldOut tests). Returns the median errors and the win rate vs the peer multiple
+ * alone.
  */
 function evalCohortSplit(trainComps: SnapshotProtocol[], testComps: SnapshotProtocol[], model: ModelConstants): { cap2: number; peer: number; win: number } {
   const train: Snapshot = { protocols: trainComps, as_of: '', source: '', floor_usd: 1, watchlist: [] };
@@ -1015,7 +1081,8 @@ function evalCohortSplit(trainComps: SnapshotProtocol[], testComps: SnapshotProt
   for (const held of testComps) {
     const peer = peerMultipleFor(held.category, peers, model).multiple;
     const size = sizeMultiplierFor(held.tvl_usd, peer, curve, model);
-    const pred = Math.max(1, held.tvl_usd * peer * size.multiplier);
+    const saturationMult = saturationMultiplier(held.tvl_usd, peer, curve, model);
+    const pred = Math.max(1, held.tvl_usd * peer * size.multiplier * saturationMult);
     const predPeer = Math.max(1, held.tvl_usd * peer);
     eCap.push(Math.abs(Math.log(pred / held.mcap_usd!)));
     ePeer.push(Math.abs(Math.log(predPeer / held.mcap_usd!)));
@@ -1088,8 +1155,8 @@ export function cohortCheck(snapshot: Snapshot, model: ModelConstants = MODEL): 
   const wins = expanding.map((s) => Math.round(s.win_vs_peer * 100));
   const winRange = `${Math.min(...wins)}-${Math.max(...wins)}`;
   return {
-    method: 'cap2 model (peer x peer-bounded size curve, [0.5x, 2x] clamp) fitted on dated token-bearing comparables only, tested on later-listed dated comparables; no growth, maturity or chain terms enter the test.',
-    note: `Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error ${errs} (closer than the peer median ${winRange}% of the time). This is a cohort split, not a historical backtest: every protocol is scored on its 2026-11-14 TVL and market cap, so it shows the model generalises to newer listings — not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.96x.`,
+    method: 'cap2 model (peer x peer-bounded size curve, [0.5x, 2x] clamp, value saturated at $500M TVL) fitted on dated token-bearing comparables only, tested on later-listed dated comparables; no growth, maturity or chain terms enter the test.',
+    note: `Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error ${errs} (closer than the peer median ${winRange}% of the time). This is a cohort split, not a historical backtest: every protocol is scored on its 2026-11-14 TVL and market cap, so it shows the model generalises to newer listings — not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.94x.`,
     dated_comps: dated.length,
     undated_comps: undated.length,
     expanding,
@@ -1122,9 +1189,10 @@ export interface RankRange {
  * mulberry32, one stream across refits, in snapshot order), the peer table (category
  * medians of the resampled comps) and the size curve (OLS on the resampled comps) are
  * refit, and every board row is re-priced under the refit — peer x peer-bounded size
- * curve with the [0.5x, 2x] clamp — with its growth, maturity and chain terms held at
- * 1.00 (radar-6 dropped the terms from the value; the inputs still ride along so the
- * call shape is unchanged), then re-ranked (ties by slug, as on the board). The row's range
+ * curve with the [0.5x, 2x] clamp, saturated at $500M TVL — with its growth, maturity
+ * and chain terms held at 1.00 (radar-6 dropped the terms from the value; the inputs
+ * still ride along so the call shape is unchanged), then re-ranked (ties by slug, as on
+ * the board). The row's range
  * is the P10-P90 of its rank across refits, plus the median. This is a REAL computed
  * range, not a cosmetic ±: a row whose rank moves when the fit wobbles shows a wide
  * range, a row pinned by its own TVL and category shows a narrow one. It is a stability
@@ -1151,7 +1219,8 @@ export function bootstrapRankRanges(
     const scored = rows.map((r) => {
       const peer = peerMultipleFor(r.category, peers, model);
       const size = sizeMultiplierFor(r.tvl_usd, peer.multiple, curve, model);
-      const implied = Math.max(1, Math.round(r.tvl_usd * peer.multiple * size.multiplier * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier));
+      const saturationMult = saturationMultiplier(r.tvl_usd, peer.multiple, curve, model);
+      const implied = Math.max(1, Math.round(r.tvl_usd * peer.multiple * size.multiplier * saturationMult * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier));
       return { slug: r.slug, implied };
     });
     scored.sort((x, y) => y.implied - x.implied || (x.slug < y.slug ? -1 : 1));
@@ -1174,7 +1243,7 @@ export function rankRangeMethod(model: ModelConstants = MODEL): RankRangeMethod 
     resampled: 'size comps with replacement (n=128)',
     refit: 'size curve OLS + peer medians per refit',
     fixed_terms: 'growth/maturity/chains at 1.00 (radar-6 dropped the terms from the value)',
-    clamp: '[0.5x, 2x] peer',
+    clamp: '[0.5x, 2x] peer; value saturated at $500M TVL (radar-7)',
     quantiles: 'P10/P90/median of rank across refits',
   };
 }
@@ -1209,7 +1278,7 @@ export function impliedValue(
   peers: PeerTable,
   model: ModelConstants = MODEL,
   curve: SizeCurve | null = null,
-): { implied: number; peer: { multiple: number; n: number; fallback: boolean }; size: { multiple: number; multiplier: number }; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+): { implied: number; peer: { multiple: number; n: number; fallback: boolean }; size: { multiple: number; multiplier: number }; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; saturationMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const peer = peerMultipleFor(protocol.category, peers, model);
   const size = sizeMultiplierFor(protocol.tvl_usd, peer.multiple, curve, model);
@@ -1223,8 +1292,13 @@ export function impliedValue(
   const growthMult = 1;
   const maturityMult = 1;
   const chainMult = 1;
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * size.multiplier));
-  return { implied, peer, size, growthPct, growthMult, maturityMult, chainMult, age };
+  // Radar-7: the value saturates at $500M TVL — a row above it is priced as if it
+  // held $500M (see saturationMultiplier). The factor ships on the row so the
+  // dashboard's re-derivation (TVL x peer x size x growth x maturity x chains x
+  // saturation) keeps working.
+  const saturationMult = saturationMultiplier(protocol.tvl_usd, peer.multiple, curve, model);
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * peer.multiple * size.multiplier * saturationMult));
+  return { implied, peer, size, growthPct, growthMult, maturityMult, chainMult, saturationMult, age };
 }
 
 /** Whether a protocol records no token at all. */
@@ -1373,6 +1447,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_multiplier: round4(s.v.growthMult),
       maturity_multiplier: round4(s.v.maturityMult),
       chain_multiplier: round4(s.v.chainMult),
+      saturation_multiplier: round4(s.v.saturationMult),
       age_days: s.v.age,
       rank_lo: range.rank_lo,
       rank_hi: range.rank_hi,
@@ -1850,6 +1925,7 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    saturation_multiplier: row.model.saturation_multiplier,
     rank_lo: row.model.rank_lo,
     rank_hi: row.model.rank_hi,
     rank_median: row.model.rank_median,
@@ -1974,6 +2050,14 @@ export function buildFarmMethod(board: BoardRow[]): FarmMethod {
   const planSentence = nonNegative === 0
     ? `Expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(bestPlanNet).toFixed(2)})`
     : `Expected net at the plan deposit is negative on ${board.length - nonNegative} of ${board.length} rows — ${bestPlanRow.slug} (#${bestPlanRow.rank}) breaks even at its plan deposit (+$${bestPlanNet.toFixed(2)})`;
+  // The Sentora sentence is built from the computed board, never assumed: radar-7
+  // saturates Sentora to #5 (it was #1 under radar-6), so the rank and verdict are
+  // read off the board; if the slug ever leaves the board, the sentence falls back
+  // to the top row.
+  const sentora = board.find((r) => r.slug === 'sentora-curator');
+  const sentoraSentence = sentora !== undefined
+    ? `Sentora (#${sentora.rank}) is ${sentora.farm_verdict} at any reasonable deposit.`
+    : `The top row (${board[0]!.slug}, #${board[0]!.rank}) is ${board[0]!.farm_verdict} at any reasonable deposit.`;
   return {
     formula: 'Break-even deposit D* = gas x TVL / expected value: a deposit D holds D/TVL of the protocol, so its expected claim is D x EV / TVL, and net = 0 solves to D* = gas x TVL / EV.',
     assumption: 'Pro-rata share of the FULL implied launch value: a generous upper bound on the claim (a real airdrop pool is a fraction of token supply), so D* is a lower bound on the true break-even deposit and the verdicts are optimistic, not conservative.',
@@ -1985,7 +2069,7 @@ export function buildFarmMethod(board: BoardRow[]): FarmMethod {
     net_at_sized_usd: { min: netsSized[0]!, median: Math.round(medianNetSized * 100) / 100, max: netsSized[netsSized.length - 1]! },
     sized_positive_net_rows: positiveSized,
     median_sized_deposit_usd: medianSized,
-    note: `At the sized deposit (twice break-even, capped at 10x the plan deposit), ${counts.farm} rows are FARM with positive expected net (median +$${farmMedianNet.toFixed(2)} at the sized deposit, exactly one gas bill by construction), ${counts.thin} are THIN and ${counts.skip} are SKIP. ${planSentence}: the plan deposit was never the sized deposit, and the verdicts are a per-dollar efficiency statement, not a value ranking — Sentora (#1) is SKIP at any reasonable deposit.`,
+    note: `At the sized deposit (twice break-even, capped at 10x the plan deposit), ${counts.farm} rows are FARM with positive expected net (median +$${farmMedianNet.toFixed(2)} at the sized deposit, exactly one gas bill by construction), ${counts.thin} are THIN and ${counts.skip} are SKIP. ${planSentence}: the plan deposit was never the sized deposit, and the verdicts are a per-dollar efficiency statement, not a value ranking — ${sentoraSentence}`,
   };
 }
 
@@ -2111,3 +2195,4 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
 export function dataScript(radar: RadarData): string {
   return `window.RADAR=${JSON.stringify(radar)};\n`;
 }
+

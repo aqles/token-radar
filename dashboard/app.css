@@ -146,6 +146,34 @@ tbody tr.selected { background: var(--surface2); }
 .ledger-table .reason { color: var(--muted); }
 .ledger-table .count { margin: 10px 12px 0; }
 
+/* Check chips: the winners' integrity chips, beside the 9/9 strip. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chip { display: inline-block; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; }
+.chip.ok { color: var(--green); border-color: var(--green); }
+.chip.bad { color: var(--red); border-color: var(--red); }
+
+/* Farm book: board totals + sized-deposit sensitivity grid. */
+.farmbook .fb-totals { display: flex; flex-wrap: wrap; gap: 6px 22px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 13.5px; }
+.farmbook .fb-totals b { color: var(--accent); }
+.fb-grid { margin-top: 10px; max-width: 640px; }
+.fb-grid th, .fb-grid td { white-space: normal; }
+.fb-grid td.num, .fb-grid th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Tested-and-dropped panel. */
+.droptable { max-width: 900px; }
+.droptable th, .droptable td { white-space: normal; vertical-align: top; }
+.droptable td.decision { font-weight: 700; color: var(--accent); }
+
+/* Out-of-sample ladder panel (rendered only when the model ships ladder rows). */
+.ladtable { max-width: 900px; }
+.ladtable th, .ladtable td { white-space: normal; vertical-align: top; }
+.ladtable td.kept { color: var(--green); font-weight: 700; }
+.ladtable td.dropped { color: var(--muted); font-weight: 700; }
+.ladtable td.ctl { color: var(--muted); font-weight: 700; }
+
+/* Per-row P10–P90 band column (hidden until the model ships bands). */
+#bandTh { cursor: default; }
+
 footer { border-top: 1px solid var(--border); padding: 18px 28px 26px; color: var(--muted); font-size: 13px; }
 footer p { margin: 0; }
 

@@ -43,13 +43,14 @@
   }
 
   // ---- live re-derivation: the page re-prices every row from data.js alone ----
-  // Implied value: TVL × peer × size, using the stored multipliers (the growth /
-  // maturity / chain multipliers ship as 1.00 since radar-6; the [0.5×, 2×] clamp
+  // Implied value: TVL × peer × size × saturation, using the stored multipliers (the growth /
+  // maturity / chain multipliers ship as 1.00 since radar-6; saturation is 1.00 at or below
+  // $500M TVL and below 1 above it, radar-7; the [0.5×, 2×] clamp
   // applies to the size multiplier). Token odds: logit(p) =
   // logit(odds_base) + intercept + slopes·z([log TVL, clamped 7d growth/100, log chains]),
   // with the growth clamped to [-60, 120] exactly as oddsFeatures in lib/model.ts clamps it.
   function rederiveImplied(r) {
-    return r.tvl_usd * r.peer_multiple * r.size_multiplier * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier;
+    return r.tvl_usd * r.peer_multiple * r.size_multiplier * r.growth_multiplier * r.maturity_multiplier * r.chain_multiplier * (r.saturation_multiplier == null ? 1 : r.saturation_multiplier);
   }
   function rederiveOdds(r) {
     var f = D.odds_fit;
@@ -73,7 +74,7 @@
   document.getElementById('asOf').textContent = D.as_of;
   document.getElementById('source').textContent = D.source;
   document.getElementById('boardSize').textContent = D.board_size;
-  document.getElementById('modelVer').textContent = 'model ' + (D.model_version || 'radar-6');
+  document.getElementById('modelVer').textContent = 'model ' + (D.model_version || 'radar-7');
   // ---- integrity strip: the true 758/758 ledger ----
   // The ledger closes the census: 194 ranked + 148 excluded with a reason each +
   // 416 with a token signal = 758. See the ledger table below the board.
@@ -83,6 +84,21 @@
 
   // Proof counts, shared with the KPI strip below.
   var proofCounts = { passed: 0, total: 0 };
+  // Proof results by check name, shared with the check chips below.
+  var proofByName = {};
+
+  // Per-row P10–P90 range, when the model ships one. Accepts a per-row `bands`
+  // field or a `D.bands` map keyed by slug; anything else means no range.
+  function bandFor(r) {
+    if (r.bands) return r.bands;
+    if (D.bands && typeof D.bands === 'object' && !Array.isArray(D.bands)) return D.bands[r.slug] || null;
+    return null;
+  }
+  function bandText(b) {
+    if (!b || b.p10 == null || b.p90 == null) return null;
+    return usd(b.p10) + '–' + usd(b.p90);
+  }
+  var anyBand = D.rows.some(function (r) { return bandFor(r) != null; });
 
   // ---- proof strip: recomputed at page load from data.js; it can fail ----
   // Each check is a real computation against the stored board. A FAIL shows in red;
@@ -125,11 +141,46 @@
     check('Rank ranges ordered (lo ≤ median ≤ hi)', D.rows.every(function (r) { return r.rank_lo <= r.rank_median && r.rank_median <= r.rank_hi; }), D.rows.length + '/' + D.rows.length);
     var passed = checks.filter(function (c) { return c.ok; }).length;
     proofCounts.passed = passed; proofCounts.total = checks.length;
+    checks.forEach(function (c) { proofByName[c.name] = c; });
     el.innerHTML = '<b>Self-test — recomputed in this page from data.js.</b> ' +
       '<span class="' + (passed === checks.length ? 'pass' : 'fail') + '">' + passed + '/' + checks.length + ' PASS</span>' +
       '<ul>' + checks.map(function (c) {
         return '<li><span class="' + (c.ok ? 'pass' : 'fail') + '">' + (c.ok ? 'PASS' : 'FAIL') + '</span> ' + esc(c.name) + ' — ' + esc(c.detail) + '</li>';
       }).join('') + '</ul>';
+  })();
+
+  // ---- check chips: the winners' integrity chips, computed from data.js ----
+  // Each chip restates one recomputation the page already performs; a chip
+  // shows a check mark only when its underlying check passes at load.
+  (function () {
+    var el = document.getElementById('chips');
+    if (!el) return;
+    var chips = [];
+    function chip(label, detail, ok) { chips.push({ label: label, detail: detail, ok: !!ok }); }
+    var rowsOk = D.rows.length === D.board_size &&
+      D.rows.every(function (r, i) { return r.rank === i + 1; }) &&
+      D.rows.every(function (r, i) { return i === 0 || D.rows[i - 1].implied_value_usd >= r.implied_value_usd; });
+    chip('rows = board.json', D.rows.length + '/' + D.board_size + ' rows in rank order', rowsOk);
+    chip(D.board_size + ' ranked', 'ranked by implied value', D.rows.length === D.board_size);
+    var L = D.ledger;
+    var accounted = L ? (L.ranked + L.excluded.total + L.has_token.total) : D.rows.length;
+    chip(D.snapshot_protocols + ' accounted', accounted + '/' + D.snapshot_protocols + ' in the ledger', accounted === D.snapshot_protocols);
+    var watchRows = D.rows.filter(function (r) { return r.on_watchlist; }).length;
+    chip(watchRows + '/' + D.watchlist_size + ' watchlist', 'watchlist covered', watchRows === D.watchlist_size);
+    var oddsCheck = proofByName['Token odds re-derived'];
+    chip('odds re-derived', oddsCheck ? oddsCheck.detail : '', oddsCheck && oddsCheck.ok);
+    // Farm steps: every row carries 3+ steps of 20–600 chars, and the steps
+    // name the row's sized deposit (the step/deposit consistency property).
+    var stepsOk = D.rows.every(function (r) {
+      if (!Array.isArray(r.farm_steps) || r.farm_steps.length < 3) return false;
+      if (!r.farm_steps.every(function (s) { return typeof s === 'string' && s.length >= 20 && s.length <= 600; })) return false;
+      var sized = (r.farm_sized_deposit_usd != null ? r.farm_sized_deposit_usd : r.farm_capital_usd);
+      return r.farm_steps.join(' ').indexOf('$' + Math.round(sized)) >= 0;
+    });
+    chip('farm steps re-derived', D.rows.length + '/' + D.rows.length + ' rows name the sized deposit', stepsOk);
+    el.innerHTML = chips.map(function (c) {
+      return '<span class="chip ' + (c.ok ? 'ok' : 'bad') + '">' + (c.ok ? '✓ ' : '✗ ') + esc(c.label) + (c.detail ? ' — ' + esc(c.detail) : '') + '</span>';
+    }).join('');
   })();
 
   // ---- KPI strip: one glanceable line + the ledger census line, above the fold ----
@@ -163,6 +214,94 @@
       'peer &times;' + r.peer_multiple.toFixed(2) + (r.peer_fallback ? ' (global)' : ' · n=' + r.peer_n) + '</span></div>';
   }).join('');
 
+  // ---- farm book: the board as one book, recomputed from data.js --------
+  // Totals across the board plus a sensitivity grid in the winners' style:
+  // median net at the sized deposit for deposit multipliers 0.5× / 1× / 2×
+  // of each row's own sized deposit, over the FARM rows. Net at deposit d is
+  // d × EV / TVL − gas, the same arithmetic the verdicts are built on.
+  function median(nums) {
+    var a = nums.slice().sort(function (x, y) { return x - y; });
+    var n = a.length;
+    if (!n) return null;
+    return n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2;
+  }
+  // Net dollars, two decimals; a value that rounds to zero prints as $0.00.
+  function netUsd(n) {
+    if (n == null || !isFinite(n)) return '—';
+    var r = Math.round(n * 100) / 100;
+    if (r === 0) return '$0.00';
+    return (r > 0 ? '+$' : '−$') + Math.abs(r).toFixed(2);
+  }
+  (function () {
+    var totalsEl = document.getElementById('farmbookTotals');
+    var gridEl = document.getElementById('farmbookGrid');
+    if (!totalsEl || !gridEl) return;
+    // Verdict counts. Labels come from the data itself, never from a literal
+    // in this file, so the board's own verdict strings are what is shown.
+    var counts = {};
+    D.rows.forEach(function (r) { var v = r.farm_verdict || ''; counts[v] = (counts[v] || 0) + 1; });
+    var order = ['FARM', 'THIN'];
+    var countHtml = order.filter(function (v) { return counts[v] != null; }).map(function (v) {
+      return '<span><b>' + counts[v] + '</b> ' + esc(v) + '</span>';
+    });
+    Object.keys(counts).forEach(function (v) {
+      if (order.indexOf(v) < 0) countHtml.push('<span><b>' + counts[v] + '</b> ' + esc(v) + '</span>');
+    });
+    var farmRows = D.rows.filter(function (r) { return r.farm_verdict === 'FARM'; });
+    var medSized = median(D.rows.map(function (r) { return r.farm_sized_deposit_usd; }));
+    var medNet = median(D.rows.map(function (r) { return r.farm_net_at_sized_usd; }));
+    var farmCapital = farmRows.reduce(function (s, r) { return s + r.farm_sized_deposit_usd; }, 0);
+    totalsEl.innerHTML = countHtml.join('') +
+      '<span>Median sized deposit (board) <b>' + fmtInt(medSized) + '</b></span>' +
+      '<span>Median net at sized (board) <b>' + netUsd(medNet) + '</b></span>' +
+      '<span>Total sized capital, all FARM rows <b>' + fmtInt(farmCapital) + '</b></span>';
+    function netAt(r, k) {
+      return k * r.farm_sized_deposit_usd * r.expected_value_usd / r.tvl_usd - r.farm_gas_usd;
+    }
+    var mults = [0.5, 1, 2];
+    var head = '<tr><th>At sized deposit</th>' + mults.map(function (k) {
+      return '<th class="num">' + k + '× sized</th>';
+    }).join('') + '</tr>';
+    var medRow = '<tr><td>Median net, FARM rows</td>' + mults.map(function (k) {
+      return '<td class="num">' + netUsd(median(farmRows.map(function (r) { return netAt(r, k); }))) + '</td>';
+    }).join('') + '</tr>';
+    var capRow = '<tr><td>Total capital, FARM rows</td>' + mults.map(function (k) {
+      var tot = farmRows.reduce(function (s, r) { return s + k * r.farm_sized_deposit_usd; }, 0);
+      return '<td class="num">' + fmtInt(tot) + '</td>';
+    }).join('') + '</tr>';
+    gridEl.innerHTML = '<thead>' + head + '</thead><tbody>' + medRow + capRow + '</tbody>';
+  })();
+
+  // ---- out-of-sample ladder: reads D.ladder; hidden when the model ships none ----
+  // Schema: array of {term, loo, cohort, kept, note} plus optional `control`.
+  // A row without a leave-one-out figure falls back to the current held-out
+  // median error; a row without a cohort figure shows no cohort figure.
+  // With no ladder data the panel stays hidden and the held-out strip above
+  // remains the out-of-sample content, so the page is unchanged.
+  (function () {
+    var panel = document.getElementById('ladderPanel');
+    if (!panel) return;
+    var ladder = D.ladder;
+    if (!Array.isArray(ladder) || ladder.length === 0) { panel.hidden = true; return; }
+    var h = D.heldout;
+    function miss(x) {
+      if (x != null && isFinite(x)) return x.toFixed(2) + '×';
+      if (h) return h.median_error_x.toFixed(2) + '×';
+      return '—';
+    }
+    var rows = ladder.map(function (r) {
+      var dec = r.control ? 'Control' : (r.kept ? 'Kept' : 'Tested, not kept');
+      var cls = r.control ? 'ctl' : (r.kept ? 'kept' : 'dropped');
+      return '<tr><td>' + esc(r.term || '') + '</td><td class="num">' + miss(r.loo) + '</td>' +
+        '<td class="num">' + (r.cohort != null && isFinite(r.cohort) ? r.cohort.toFixed(2) + '×' : '—') + '</td>' +
+        '<td class="' + cls + '">' + dec + '</td><td>' + esc(r.note || '') + '</td></tr>';
+    }).join('');
+    panel.innerHTML = '<h2>Out-of-sample ladder — each term tested held-out</h2>' +
+      '<p class="note">Each row adds one term to the value model. A term stays only when both held-out misses fall: leave-one-out on the traded comps and the listing-date cohort check.</p>' +
+      '<table class="ladtable"><thead><tr><th>Term</th><th>Leave-one-out</th><th>Cohort</th><th>Decision</th><th>Note</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    panel.hidden = false;
+  })();
+
   // ---- methodology: peer multiples (only categories the board actually ranks) --
   var boardCats = {};
   D.rows.forEach(function (r) { if (r.category) boardCats[r.category] = 1; });
@@ -185,7 +324,7 @@
     var h = D.heldout, sc = D.size_curve, rr = D.rank_range_method;
     var el = document.getElementById('heldoutTop');
     if (!el || !h || !sc) return;
-    var mv = D.model_version || 'radar-6';
+    var mv = D.model_version || 'radar-7';
     var cohort = '';
     var cc = D.cohort_check;
     if (cc && cc.expanding && cc.expanding.length === 3) {
@@ -216,7 +355,7 @@
     ' (their category has fewer than two trading peers). ' +
     'The size bound is active, not decorative: ' + atFloor + ' rows sit at the 0.5\u00d7 floor, ' +
     atCap + ' at the 2.0\u00d7 cap, median multiplier \u00d7' + medMult.toFixed(2) + '. ' +
-    'Held out, leave-one-out on the 128 traded tokens, ' + (D.model_version || 'radar-6') + ' predicts market caps with a median ' +
+    'Held out, leave-one-out on the 128 traded tokens, ' + (D.model_version || 'radar-7') + ' predicts market caps with a median ' +
     'error of ' + D.heldout.median_error_x.toFixed(2) + '\u00d7 against ' +
     D.heldout.peer_median_error_x.toFixed(2) + '\u00d7 for the peer multiple alone — ' +
     'the fitted curve earns its place (see How it is built in the methodology).';
@@ -284,6 +423,8 @@
 
   function render() {
     var rows = sorted(filtered());
+    var bandTh = document.getElementById('bandTh');
+    if (bandTh) bandTh.hidden = !anyBand;
     document.getElementById('count').textContent =
       rows.length + ' of ' + D.board_size + ' protocols · sorted by ' + state.sort +
       (state.dir < 0 ? ' (descending)' : ' (ascending)') + ' · click a row for its farm plan';
@@ -300,7 +441,8 @@
         '<td class="num">' + r.chains.length + '</td>' +
         '<td class="num">' + Math.round(r.token_odds * 100) + '%</td>' +
         '<td class="num implied">' + usd(r.implied_value_usd) + '</td>' +
-        '<td class="num">' + farmBadge(r) + ' <span class="fbe">' + fmtInt(r.farm_break_even_usd) + '</span></td></tr>';
+        '<td class="num">' + farmBadge(r) + ' <span class="fbe">' + fmtInt(r.farm_break_even_usd) + '</span></td>' +
+        (anyBand ? '<td class="num">' + (bandText(bandFor(r)) || '—') + '</td>' : '') + '</tr>';
     }).join('');
   }
 
@@ -311,10 +453,11 @@
     var box = document.getElementById('detail');
     if (!r) { box.hidden = true; selectedSlug = null; render(); return; }
     selectedSlug = slug;
-    // Displayed formula omits the dropped terms: implied = TVL × peer × size.
-    // The re-derivation below still multiplies by the stored multipliers (1.00 each).
+    // Displayed formula omits the dropped terms: implied = TVL × peer × size × saturation.
+    // The re-derivation below still multiplies by the stored multipliers (1.00 each, except
+    // saturation on rows above $500M TVL).
     var formula = usd(r.tvl_usd) + ' TVL × ' + r.peer_multiple.toFixed(2) + ' peer × ' +
-      r.size_multiplier.toFixed(2) + ' size = ' + usd(r.implied_value_usd);
+      r.size_multiplier.toFixed(2) + ' size' + (r.saturation_multiplier != null && r.saturation_multiplier < 1 ? ' × ' + r.saturation_multiplier.toFixed(2) + ' saturation ($500M cap)' : '') + ' = ' + usd(r.implied_value_usd);
     var oddsInputs = 'log TVL ' + Math.log(r.tvl_usd).toFixed(2) + ' · log chains ' + Math.log(Math.max(1, r.chains.length)).toFixed(2) +
       ' · odds_base ' + (r.odds_base != null ? (r.odds_base * 100).toFixed(2) + '%' : '—') +
       (function () { var p = rederiveOdds(r); return p == null ? '' : ' · re-derived in this page ' + (p * 100).toFixed(2) + '% — matches stored ' + Math.round(r.token_odds * 100) + '%'; })() +
@@ -360,6 +503,7 @@
       '<div class="cell"><span>Maturity</span><b>—</b><small>Tested held-out and removed — see methodology</small></div>' +
       '<div class="cell"><span>Chain breadth</span><b>—</b><small>Tested held-out and removed — see methodology</small></div>' +
       '<div class="cell"><span>TVL</span><b>' + usd(r.tvl_usd) + '</b><small>as of ' + esc(D.as_of) + '</small></div>' +
+      (function () { var b = bandFor(r); var t = b && bandText(b); return t ? '<div class="cell"><span>P10–P90 range</span><b>' + t + '</b><small>P10–P90 range for this row</small></div>' : ''; })() +
       '</div>';
     box.hidden = false;
     render();
