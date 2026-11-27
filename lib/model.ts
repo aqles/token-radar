@@ -20,7 +20,8 @@
 // $500M threshold is the only one of $100M / $250M / $500M / $750M / $1B / $1.5B /
 // $2B tested that improves LOO on all three populations at once. The level follows:
 // top implied $294.8M -> $70.3M (bitfi-basis, unchanged: TVL below $500M), board total
-// $2.78B -> $2.11B; farm verdicts re-derive under the same rule, 70/61/63 -> 70/60/64.
+// $2.78B -> $2.11B; farm verdicts re-derive under the same rule, with the counts
+// recomputed at run time by buildFarmMethod (never typed in here).
 // (b) the P1 term ladder FAILED and ships nothing (see evidence section 2): replicating
 // kevin's 8-row ladder (flat -> size curve -> category ridge 16/64 -> chain count ->
 // family -> 7-day growth -> years listed) on our data, each row scored on LOO + WF-40
@@ -58,26 +59,25 @@
 // deposit at which expected net = 0 solves D* = gas * TVL / EV. This is a GENEROUS upper bound
 // on the claim — it hands the farmer a pro-rata share of the FULL implied launch value, while a
 // real airdrop pool is a fraction of token supply — so D* is a LOWER bound on the true
-// break-even deposit, and the verdicts built on it are optimistic, not conservative. The
+// break-even deposit, and any verdict built on it alone is optimistic, not conservative. The
 // rejected alternative (EV scaling with deposit from the plan deposit, D* = capital * gas / EV)
 // is degenerate: EV >> gas on every row, so D* would be pennies on all 194 rows. Since radar-6
-// the verdict is computed AT A SIZED DEPOSIT (see farmSizedDeposit / farmVerdictFor):
+// the verdict was computed AT A SIZED DEPOSIT (see farmSizedDeposit / farmVerdictFor):
 // S = min(2 x D*, 10 x plan deposit) — twice the break-even deposit, capped at ten times the
-// TVL-tiered plan deposit, so S <= $2,500. FARM if S reaches 2 x D* within the cap
-// (D* <= 5 x plan): expected net at S is then exactly one gas bill by construction, positive
-// on every FARM row. THIN if S is capped at 10 x plan but net at S is still positive. SKIP if
-// net at S is <= 0 (D* > 10 x plan) or token odds < 0.01. On this snapshot that gives 70 FARM /
-// 60 THIN / 64 SKIP (v5, judged at the plan deposit, gave 7/89/98). The rule alone, applied to
-// the v5 board, would have given 49/47/98 with the SKIP set identical to v5's; the radar-6
-// counts differ because the term drop raised implied values and EV, so D* fell on most rows;
-// radar-7's saturation lowers the giants' implied values again, moving one THIN row to SKIP.
-// Expected net at the PLAN deposit is negative on 193 of 194 rows — one row,
-// anemoy-capital (#78), breaks even at its plan deposit (+$4.83) after the term drop nearly
-// doubled its implied value (its v5 terms were 0.53x combined). The verdict is a
-// per-dollar efficiency statement, not a value ranking: the biggest rows (Sentora, Steakhouse)
-// are SKIP because their EV per TVL dollar is small, while small high-odds rows are FARM.
-// Capital is TVL-tiered ($250/$150/$100/$50), never flat; hold days are age-tiered (60/45/30);
-// timelines start at the snapshot date.
+// TVL-tiered plan deposit, so S <= $2,500. That sized-deposit rule made FARM tautological:
+// expected net at S is exactly one gas bill by construction, positive on every FARM row.
+// This round fixes that: the verdict is now computed AT THE PLAN DEPOSIT, under a
+// stated realistic airdrop-pool share (AIRDROP_POOL_SHARE = 7.5% of implied launch value,
+// the midpoint of 5-10%). FARM only when the expected net at the plan deposit is positive
+// under that realistic pool (and token odds are at least 1%); THIN when only the generous
+// 100%-of-EV upper bound is positive at the plan deposit; SKIP otherwise. The sized deposit
+// is kept, relabelled as the generous upper-bound deposit, because the farm steps name it
+// and the farm book shows its sensitivity grid — but it no longer decides any verdict.
+// Expected net at the PLAN deposit under the generous bound is negative on 193 of 194 rows
+// on this snapshot — one row, anemoy-capital (#78), breaks even at its plan deposit (+$4.83)
+// — and under the realistic 7.5% pool it is negative on every row, so FARM may be zero rows:
+// the dashboard says so instead of hiding it. Capital is TVL-tiered ($250/$150/$100/$50),
+// never flat; hold days are age-tiered (60/45/30); timelines start at the snapshot date.
 //
 // Rank ranges are a STABILITY statement, not a prediction interval: each row's rank is
 // recomputed under 200 bootstrap refits of the size curve and the peer table (the 128
@@ -259,6 +259,14 @@ export const MODEL: ModelConstants = {
 /** The model's version label: the dashboard names it. */
 export const MODEL_VERSION = 'radar-7';
 
+/**
+ * The realistic airdrop-pool share: the fraction of a launch's implied value a farmer
+ * can plausibly claim pro-rata. A real airdrop pool is a fraction of token supply, not
+ * the full implied launch value, so verdicts are judged under 7.5% (midpoint of 5-10%),
+ * while the 100%-of-EV figures are kept as a labelled generous upper bound.
+ */
+export const AIRDROP_POOL_SHARE = 0.075;
+
 /** How many live-token protocols the Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
 
@@ -270,12 +278,13 @@ export interface FarmStep {
 }
 
 /**
- * The computed farm verdict for one row (see farmVerdictFor). FARM: the sized deposit
- * reaches twice the break-even deposit within the cap, so expected net at the sized
- * deposit is exactly one gas bill by construction. THIN: the sized deposit is capped
- * at 10x the plan deposit but net at the sized deposit is still positive. SKIP: net at
- * the sized deposit is <= 0 (break-even exceeds 10x the plan deposit), or the token
- * odds are below 1%.
+ * The computed farm verdict for one row (see farmVerdictFor). Judged AT THE
+ * PLAN DEPOSIT under a realistic airdrop-pool share (AIRDROP_POOL_SHARE = 7.5%).
+ * FARM: net at the plan deposit is positive under the realistic pool, and token
+ * odds are at least 1%. THIN: only the generous 100%-of-EV upper bound is
+ * positive at the plan deposit. SKIP: neither is positive, or odds are below 1%.
+ * The sized deposit is a generous upper-bound deposit only; it no longer decides
+ * the verdict.
  */
 export type FarmVerdict = 'FARM' | 'THIN' | 'SKIP';
 
@@ -381,23 +390,30 @@ export interface FarmMethod {
   formula: string;
   /** The assumption the formula rests on, and its direction (optimistic lower bound). */
   assumption: string;
-  /** The sized-deposit rule, in words: twice break-even, capped at 10x the plan deposit. */
+  /** The sized-deposit rule, in words: twice break-even, capped at 10x the plan deposit.
+   * The sized deposit is a generous upper-bound deposit only; it no longer decides the verdict. */
   sized_deposit_rule: string;
-  /** The verdict thresholds, in words (verdicts are computed at the sized deposit). */
+  /** The verdict thresholds, in words (verdicts are computed at the plan deposit under the realistic pool share). */
   thresholds: string;
-  /** Verdict counts across the 194 board rows. */
+  /** The realistic airdrop-pool share the verdicts are judged under (0.075). */
+  pool_share: number;
+  /** Verdict counts across the board rows (computed at run time, never typed in). */
   counts: { farm: number; thin: number; skip: number };
-  /** Expected net at the plan deposit across the board (min / median / max, dollars). */
+  /** Expected net at the plan deposit (min / median / max) — generous 100%-of-EV upper bound. */
   net_at_plan_usd: { min: number; median: number; max: number };
-  /** Rows whose expected net at the plan deposit is >= 0 (zero on this snapshot). */
+  /** Rows whose expected net at the plan deposit is >= 0 under the generous bound. */
   net_non_negative_rows: number;
+  /** Expected net at the plan deposit under the realistic pool share (min / median / max). */
+  net_at_plan_realistic_usd: { min: number; median: number; max: number };
+  /** Rows whose expected net at the plan deposit is >= 0 under the realistic pool share. */
+  net_non_negative_realistic_rows: number;
   /** Expected net at the sized deposit across the board (min / median / max, dollars). */
   net_at_sized_usd: { min: number; median: number; max: number };
   /** Rows whose expected net at the sized deposit is > 0 (FARM + THIN). */
   sized_positive_net_rows: number;
   /** Median sized deposit across the board, in whole dollars. */
   median_sized_deposit_usd: number;
-  /** The headline the dashboard may quote: verdicts at the sized deposit, and the plan-deposit finding kept alongside. */
+  /** The headline the dashboard may quote: verdicts at the plan deposit under the realistic pool share, with the generous upper bound kept alongside. */
   note: string;
 }
 
@@ -423,14 +439,22 @@ export interface BoardRow {
   farm_gas_usd: number;
   /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV (see farmBreakEvenDeposit). */
   farm_break_even_usd: number;
-  /** The computed farm verdict: FARM / THIN / SKIP, at the sized deposit (see farmVerdictFor). */
+  /** The computed farm verdict: FARM / THIN / SKIP, judged at the plan deposit under the realistic pool share (see farmVerdictFor). */
   farm_verdict: FarmVerdict;
-  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (negative on 193 of 194 rows). */
+  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (generous 100%-of-EV upper bound; negative on most rows). */
   farm_net_at_plan_usd: number;
-  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit) (see farmSizedDeposit). */
+  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit). Generous upper-bound deposit only. */
   farm_sized_deposit_usd: number;
-  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars (positive on every FARM row by construction). */
+  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars (generous upper bound; positive on a FARM row of the old sized-deposit rule by construction — that rule no longer decides the verdict). */
   farm_net_at_sized_usd: number;
+  /** The realistic break-even deposit: gas * TVL / (EV * AIRDROP_POOL_SHARE). */
+  farm_realistic_break_even_usd: number;
+  /** Expected net at the plan deposit under the realistic pool share, to cents. */
+  farm_net_at_plan_realistic_usd: number;
+  /** Expected value per TVL dollar (EV / TVL). */
+  farm_ev_per_dollar_usd: number;
+  /** The airdrop-pool share the realistic figures assume. */
+  farm_pool_share: number;
   /** The farm timeline starts at the snapshot date: the board's "today". */
   farm_start_date: string;
   /** Start date + the age-tiered hold days. */
@@ -484,14 +508,22 @@ export interface RadarRow {
   farm_gas_usd: number;
   /** The solved break-even deposit in whole dollars: D* = gas * TVL / EV. */
   farm_break_even_usd: number;
-  /** The computed farm verdict: FARM / THIN / SKIP, at the sized deposit. */
+  /** The computed farm verdict: FARM / THIN / SKIP, judged at the plan deposit under the realistic pool share. */
   farm_verdict: FarmVerdict;
-  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars. */
+  /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars (generous 100%-of-EV upper bound). */
   farm_net_at_plan_usd: number;
-  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit). */
+  /** The sized deposit in whole dollars: S = min(2 x D*, 10 x plan deposit). Generous upper-bound deposit only. */
   farm_sized_deposit_usd: number;
-  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars. */
+  /** Expected net at the sized deposit: S * EV / TVL - gas, in dollars (generous upper bound). */
   farm_net_at_sized_usd: number;
+  /** The realistic break-even deposit: gas * TVL / (EV * AIRDROP_POOL_SHARE), in whole dollars. */
+  farm_realistic_break_even_usd: number;
+  /** Expected net at the plan deposit under the realistic pool share, in dollars, to cents. */
+  farm_net_at_plan_realistic_usd: number;
+  /** Expected value per TVL dollar (EV / TVL). */
+  farm_ev_per_dollar_usd: number;
+  /** The airdrop-pool share the realistic figures assume (AIRDROP_POOL_SHARE). */
+  farm_pool_share: number;
   /** The farm timeline starts at the snapshot date. */
   farm_start_date: string;
   /** Start date + the age-tiered hold days. */
@@ -996,7 +1028,7 @@ export function sizeMultiplierFor(
  * value evaluated at the row's own TVL, so it is exact by construction — the saturated
  * implied value of a row above the threshold equals the implied value of a row with the
  * same peer at $500M TVL. The ratio is clamped to (0, 1]: the bounded size multiple is
- * non-increasing in TVL on this snapshot (curve slope 0.5223 < 1), so the ratio should
+ * non-increasing in TVL on this snapshot (curve slope below 1), so the ratio should
  * never exceed 1, but the clamp keeps the factor a discount even if a future snapshot
  * fitted a slope above 1. With a null curve the factor is 1 (no curve, nothing to
  * saturate). Why $500M: it is the only threshold of $100M / $250M / $500M / $750M /
@@ -1390,13 +1422,18 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const cost = farmCost(p, v.age);
     const expected = Math.max(1, Math.round(v.implied * tokenOdds));
     // Farm economics (additive: nothing above this line moves any priced value).
+    // The verdict is judged at the plan deposit, not at the sized deposit (see
+    // farmVerdictFor): the sized deposit is kept as a generous upper-bound deposit only.
     const breakEven = farmBreakEvenDeposit(p.tvl_usd, expected, cost.gas);
     const sized = farmSizedDeposit(breakEven, cost.capital);
     const netAtSized = farmNetAtSized(sized, p.tvl_usd, expected, cost.gas);
-    const verdict = farmVerdictFor(sized, breakEven, cost.capital, netAtSized, tokenOdds);
     const netAtPlan = farmNetAtPlan(cost.capital, p.tvl_usd, expected, cost.gas);
+    const realisticBreakEven = farmRealisticBreakEvenDeposit(p.tvl_usd, expected, cost.gas);
+    const netAtPlanRealistic = farmNetAtPlanRealistic(cost.capital, p.tvl_usd, expected, cost.gas);
+    const verdict = farmVerdictFor(netAtPlanRealistic, netAtPlan, tokenOdds);
+    const evPerDollar = farmEvPerDollar(expected, p.tvl_usd);
     const timeline = farmTimeline(snapshot.as_of, v.age);
-    return { p, v, tokenOdds, oddsBase, expected, cost, breakEven, sized, netAtSized, verdict, netAtPlan, timeline };
+    return { p, v, tokenOdds, oddsBase, expected, cost, breakEven, sized, netAtSized, verdict, netAtPlan, realisticBreakEven, netAtPlanRealistic, evPerDollar, timeline };
   });
   scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const rankRanges = bootstrapRankRanges(snapshot, scored.map((s) => ({
@@ -1433,6 +1470,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     farm_net_at_plan_usd: s.netAtPlan,
     farm_sized_deposit_usd: s.sized,
     farm_net_at_sized_usd: s.netAtSized,
+    farm_realistic_break_even_usd: s.realisticBreakEven,
+    farm_net_at_plan_realistic_usd: s.netAtPlanRealistic,
+    farm_ev_per_dollar_usd: s.evPerDollar,
+    farm_pool_share: AIRDROP_POOL_SHARE,
     farm_start_date: s.timeline.start_date,
     farm_end_date: s.timeline.end_date,
     farm_hold_days: s.timeline.hold_days,
@@ -1570,17 +1611,12 @@ export function farmBreakEvenDeposit(tvlUsd: number, expectedValueUsd: number, g
 /**
  * The sized deposit, in whole dollars: S = min(2 x D*, 10 x plan deposit).
  *
- * The verdicts are computed AT this deposit, not at a fixed deposit that loses
- * everywhere: depositing twice the break-even deposit is the smallest round multiple
- * of D* at which expected net is positive by construction (net = 2 x gas - gas = gas),
- * and the cap at ten times the plan deposit keeps the sized deposit inside the same
- * sane envelope the radar-5 verdicts already used as their SKIP threshold (the plan
- * deposit is TVL-tiered $50/$100/$150/$250, so S <= $2,500 on every row). The multiple
- * 2 and the cap 10x are the rule's two stated parameters — no per-row tuning: every
- * row's sized deposit comes out of this one formula. Sensitivity (see
- * scratch/v6-model-evidence.md §2): m=1.5/cap 10x gives 67/29/98, m=3/cap 10x gives
- * 21/75/98 — the SKIP count is 98 under every multiple, because SKIP means
- * D* > 10 x plan, which no multiple touches.
+ * Kept as the generous upper-bound deposit: twice the break-even deposit is the
+ * smallest round multiple of D* at which expected net is positive by construction
+ * (net = 2 x gas - gas = gas), capped at ten times the plan deposit (TVL-tiered
+ * $50/$100/$150/$250, so S <= $2,500 on every row). It no longer decides any
+ * verdict (see farmVerdictFor): the verdict is judged at the plan deposit instead,
+ * so a FARM row is no longer positive by construction.
  */
 export function farmSizedDeposit(breakEvenUsd: number, capitalUsd: number): number {
   if (breakEvenUsd <= 0 || capitalUsd <= 0) return 1;
@@ -1594,32 +1630,60 @@ export function farmNetAtSized(sizedUsd: number, tvlUsd: number, expectedValueUs
 }
 
 /**
- * The computed farm verdict from the sized deposit S, the solved break-even deposit D*,
- * the plan deposit (capital, TVL-tiered $50/$100/$150/$250), the expected net at the
- * sized deposit, and the token odds:
- *   FARM  S reaches 2 x D* within the cap (2 x D* <= 10 x capital, i.e. D* <= 5 x
- *         capital): the deposit is twice break-even, so expected net at S is exactly
- *         one gas bill — positive by construction, on every FARM row.
- *   THIN  S is capped at 10 x capital but net at S is still positive (5 x capital <
- *         D* <= 10 x capital): the farmer cannot reach twice break-even within the
- *         cap, and the margin at the capped deposit is thinner than one gas bill.
- *   SKIP  net at S <= 0 (D* > 10 x capital: even ten times the plan deposit does not
- *         break even), or token odds < 0.01 (a sub-1% launch is a lottery ticket, not
- *         a farm — on this snapshot all 5 sub-1% rows already exceed 10x, so the odds
- *         clause binds on no additional row; it is a guard, not a driver).
- * The verdict is a per-dollar efficiency statement, not a value ranking: the biggest rows
- * are SKIP because their EV per TVL dollar is small, while small high-odds rows are FARM.
- * On this snapshot: 70 FARM / 61 THIN / 63 SKIP (radar-5, judged at the plan deposit,
- * gave 7/89/98). The rule alone, applied to the v5 board, would have given 49/47/98
- * with the SKIP set identical to v5's; the radar-6 counts differ because the term drop
- * raised implied values and EV, so D* fell on most rows. Expected net at the plan
- * deposit is negative on 193 of 194 rows — one row, anemoy-capital (#78), breaks even
- * at its plan deposit (+$4.83) after the term drop nearly doubled its implied value.
+ * The realistic break-even deposit, in whole dollars: D*_real = gas * TVL / (EV * share),
+ * with share = AIRDROP_POOL_SHARE (7.5%) by default. Only a fraction of a launch's
+ * implied value is ever paid out as an airdrop, so the realistic break-even is 1/share
+ * times the generous one. EV <= 0, TVL <= 0, gas <= 0 or share <= 0 returns 0.
  */
-export function farmVerdictFor(sizedUsd: number, breakEvenUsd: number, capitalUsd: number, netAtSizedUsd: number, tokenOdds: number): FarmVerdict {
-  if (tokenOdds < 0.01 || netAtSizedUsd <= 0) return 'SKIP';
-  if (2 * breakEvenUsd <= 10 * capitalUsd) return 'FARM';
-  return 'THIN';
+export function farmRealisticBreakEvenDeposit(
+  tvlUsd: number,
+  expectedValueUsd: number,
+  gasUsd: number,
+  share: number = AIRDROP_POOL_SHARE,
+): number {
+  if (expectedValueUsd <= 0 || tvlUsd <= 0 || gasUsd <= 0 || share <= 0) return 0;
+  return Math.max(1, Math.round((gasUsd * tvlUsd) / (expectedValueUsd * share)));
+}
+
+/**
+ * Expected net at the plan deposit under a realistic airdrop pool:
+ * capital * EV * share / TVL - gas, in dollars, to cents. With share = 1 this is
+ * farmNetAtPlan (the generous 100%-of-EV upper bound); with the default 7.5% it is
+ * the number the verdict is judged on.
+ */
+export function farmNetAtPlanRealistic(
+  capitalUsd: number,
+  tvlUsd: number,
+  expectedValueUsd: number,
+  gasUsd: number,
+  share: number = AIRDROP_POOL_SHARE,
+): number {
+  if (tvlUsd <= 0) return -gasUsd;
+  return Math.round(((capitalUsd * expectedValueUsd * share) / tvlUsd - gasUsd) * 100) / 100;
+}
+
+/** Expected value per TVL dollar (EV / TVL): the per-dollar efficiency the verdict is built on. */
+export function farmEvPerDollar(expectedValueUsd: number, tvlUsd: number): number {
+  if (tvlUsd <= 0) return 0;
+  return Math.round((expectedValueUsd / tvlUsd) * 1e6) / 1e6;
+}
+
+/**
+ * The computed farm verdict, judged AT THE PLAN DEPOSIT — not at the sized deposit.
+ * Inputs are the expected net at the plan deposit under the realistic pool share and
+ * under the generous 100%-of-EV upper bound, plus the token odds:
+ *   FARM  net at the plan deposit is positive under the realistic pool, and token
+ *         odds are at least 1%.
+ *   THIN  only the generous upper bound is positive at the plan deposit.
+ *   SKIP  neither net is positive at the plan deposit, or token odds are below 1%.
+ * Nothing here is positive by construction: a FARM row earned it at the plan deposit
+ * a farmer actually pays, under a pool share stated in the open.
+ */
+export function farmVerdictFor(netAtPlanRealisticUsd: number, netAtPlanGenerousUsd: number, tokenOdds: number): FarmVerdict {
+  if (tokenOdds < 0.01) return 'SKIP';
+  if (netAtPlanRealisticUsd > 0) return 'FARM';
+  if (netAtPlanGenerousUsd > 0) return 'THIN';
+  return 'SKIP';
 }
 
 /** Expected net at the plan deposit: capital * EV / TVL - gas, in dollars, to cents. */
@@ -1914,6 +1978,10 @@ export function radarRow(row: BoardRow): RadarRow {
     farm_net_at_plan_usd: row.farm_net_at_plan_usd,
     farm_sized_deposit_usd: row.farm_sized_deposit_usd,
     farm_net_at_sized_usd: row.farm_net_at_sized_usd,
+    farm_realistic_break_even_usd: row.farm_realistic_break_even_usd,
+    farm_net_at_plan_realistic_usd: row.farm_net_at_plan_realistic_usd,
+    farm_ev_per_dollar_usd: row.farm_ev_per_dollar_usd,
+    farm_pool_share: row.farm_pool_share,
     farm_start_date: row.farm_start_date,
     farm_end_date: row.farm_end_date,
     farm_hold_days: row.farm_hold_days,
@@ -2039,37 +2107,44 @@ export function buildFarmMethod(board: BoardRow[]): FarmMethod {
   const sizedDeposits = board.map((r) => r.farm_sized_deposit_usd).sort((a, b) => a - b);
   const midD = Math.floor(sizedDeposits.length / 2);
   const medianSized = sizedDeposits.length % 2 === 1 ? sizedDeposits[midD]! : (sizedDeposits[midD - 1]! + sizedDeposits[midD]!) / 2;
-  const farmNets = board.filter((r) => r.farm_verdict === 'FARM').map((r) => r.farm_net_at_sized_usd).sort((a, b) => a - b);
-  const farmMedianNet = farmNets.length === 0 ? 0 : farmNets[Math.floor(farmNets.length / 2)]!;
-  // The plan-deposit sentence is built from the computed numbers, never assumed: on
-  // this snapshot one row (anemoy-capital) breaks even at its plan deposit after the
-  // radar-6 term drop nearly doubled its implied value, so the sentence must say 193
-  // of 194, not "all 194 rows".
+  const farmNets = board.filter((r) => r.farm_verdict === 'FARM').map((r) => r.farm_net_at_plan_realistic_usd).sort((a, b) => a - b);
+  const farmMedianNet = farmNets.length === 0 ? null : farmNets[Math.floor(farmNets.length / 2)]!;
+  // Realistic-pool stats, computed from the board: the verdicts are judged on these.
+  const netsReal = board.map((r) => r.farm_net_at_plan_realistic_usd).sort((a, b) => a - b);
+  const midR = Math.floor(netsReal.length / 2);
+  const medianNetReal = netsReal.length % 2 === 1 ? netsReal[midR]! : (netsReal[midR - 1]! + netsReal[midR]!) / 2;
+  const nonNegativeReal = board.filter((r) => r.farm_net_at_plan_realistic_usd >= 0).length;
+  const bestPlanNetReal = netsReal[netsReal.length - 1]!;
+  const bestPlanRowReal = board.find((r) => r.farm_net_at_plan_realistic_usd === bestPlanNetReal)!;
+  // The plan-deposit sentences are built from the computed numbers, never assumed.
   const bestPlanNet = nets[nets.length - 1]!;
   const bestPlanRow = board.find((r) => r.farm_net_at_plan_usd === bestPlanNet)!;
   const planSentence = nonNegative === 0
-    ? `Expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(bestPlanNet).toFixed(2)})`
-    : `Expected net at the plan deposit is negative on ${board.length - nonNegative} of ${board.length} rows — ${bestPlanRow.slug} (#${bestPlanRow.rank}) breaks even at its plan deposit (+$${bestPlanNet.toFixed(2)})`;
-  // The Sentora sentence is built from the computed board, never assumed: radar-7
-  // saturates Sentora to #5 (it was #1 under radar-6), so the rank and verdict are
-  // read off the board; if the slug ever leaves the board, the sentence falls back
-  // to the top row.
+    ? `Expected net at the plan deposit under the generous 100%-of-EV upper bound is negative on all ${board.length} rows (best \u2212$${Math.abs(bestPlanNet).toFixed(2)})`
+    : `Expected net at the plan deposit under the generous 100%-of-EV upper bound is negative on ${board.length - nonNegative} of ${board.length} rows — ${bestPlanRow.slug} (#${bestPlanRow.rank}) breaks even at its plan deposit (+$${bestPlanNet.toFixed(2)})`;
+  const realisticSentence = nonNegativeReal === 0
+    ? `Under a realistic 7.5% airdrop pool, expected net at the plan deposit is negative on all ${board.length} rows (best \u2212$${Math.abs(bestPlanNetReal).toFixed(2)})`
+    : `Under a realistic 7.5% airdrop pool, expected net at the plan deposit is negative on ${board.length - nonNegativeReal} of ${board.length} rows — ${bestPlanRowReal.slug} (#${bestPlanRowReal.rank}) breaks even at its plan deposit (+$${bestPlanNetReal.toFixed(2)})`;
+  // The Sentora sentence is built from the computed board, never assumed.
   const sentora = board.find((r) => r.slug === 'sentora-curator');
   const sentoraSentence = sentora !== undefined
     ? `Sentora (#${sentora.rank}) is ${sentora.farm_verdict} at any reasonable deposit.`
     : `The top row (${board[0]!.slug}, #${board[0]!.rank}) is ${board[0]!.farm_verdict} at any reasonable deposit.`;
   return {
-    formula: 'Break-even deposit D* = gas x TVL / expected value: a deposit D holds D/TVL of the protocol, so its expected claim is D x EV / TVL, and net = 0 solves to D* = gas x TVL / EV.',
-    assumption: 'Pro-rata share of the FULL implied launch value: a generous upper bound on the claim (a real airdrop pool is a fraction of token supply), so D* is a lower bound on the true break-even deposit and the verdicts are optimistic, not conservative.',
-    sized_deposit_rule: 'Sized deposit S = min(2 x D*, 10 x plan deposit): twice the break-even deposit, capped at ten times the TVL-tiered plan deposit ($250/$150/$100/$50), so S is at most $2,500. The multiple 2 and the cap 10x are the rule\u2019s two stated parameters; every row\u2019s sized deposit comes out of this one formula.',
-    thresholds: 'Verdicts are computed at the sized deposit: FARM if S reaches 2 x D* within the cap (D* at most 5x the plan deposit) — expected net at S is then exactly one gas bill, positive by construction; THIN if S is capped at 10x the plan deposit but net at S is still positive; SKIP if net at S is zero or negative (D* over 10x the plan deposit) or token odds below 1%.',
+    formula: 'Break-even deposit D* = gas x TVL / expected value: a deposit D holds D/TVL of the protocol, so its expected claim is D x EV / TVL, and net = 0 solves to D* = gas x TVL / EV. Realistic break-even D*_real = gas x TVL / (EV x 0.075): only 7.5% of the implied launch value is assumed to be paid out as an airdrop.',
+    assumption: 'Verdicts are judged under a realistic airdrop pool of 7.5% of implied launch value (AIRDROP_POOL_SHARE, midpoint of 5-10%): a real airdrop pool is a fraction of token supply. The 100%-of-EV figures are kept alongside as a labelled generous upper bound, so D* is a lower bound on the true break-even deposit and the realistic figures are the conservative ones.',
+    sized_deposit_rule: 'Sized deposit S = min(2 x D*, 10 x plan deposit): twice the generous break-even deposit, capped at ten times the TVL-tiered plan deposit ($250/$150/$100/$50), so S is at most $2,500. The multiple 2 and the cap 10x are the rule\u2019s two stated parameters; every row\u2019s sized deposit comes out of this one formula. The sized deposit is a generous upper-bound deposit only; it no longer decides any verdict.',
+    thresholds: 'Verdicts are computed at the plan deposit: FARM if expected net at the plan deposit is positive under the realistic 7.5% pool and token odds are at least 1%; THIN if only the generous 100%-of-EV upper bound is positive at the plan deposit; SKIP if neither net is positive at the plan deposit or token odds are below 1%. Nothing is positive by construction.',
+    pool_share: AIRDROP_POOL_SHARE,
     counts,
     net_at_plan_usd: { min: nets[0]!, median: Math.round(medianNet * 100) / 100, max: nets[nets.length - 1]! },
     net_non_negative_rows: nonNegative,
+    net_at_plan_realistic_usd: { min: netsReal[0]!, median: Math.round(medianNetReal * 100) / 100, max: netsReal[netsReal.length - 1]! },
+    net_non_negative_realistic_rows: nonNegativeReal,
     net_at_sized_usd: { min: netsSized[0]!, median: Math.round(medianNetSized * 100) / 100, max: netsSized[netsSized.length - 1]! },
     sized_positive_net_rows: positiveSized,
     median_sized_deposit_usd: medianSized,
-    note: `At the sized deposit (twice break-even, capped at 10x the plan deposit), ${counts.farm} rows are FARM with positive expected net (median +$${farmMedianNet.toFixed(2)} at the sized deposit, exactly one gas bill by construction), ${counts.thin} are THIN and ${counts.skip} are SKIP. ${planSentence}: the plan deposit was never the sized deposit, and the verdicts are a per-dollar efficiency statement, not a value ranking — ${sentoraSentence}`,
+    note: `Judged at the plan deposit under a realistic 7.5% airdrop pool, ${counts.farm} rows are FARM${farmMedianNet === null ? '' : ` (median +$${farmMedianNet.toFixed(2)} at the plan deposit)`}, ${counts.thin} are THIN and ${counts.skip} are SKIP. ${realisticSentence}. ${planSentence}. The verdicts are a per-dollar efficiency statement, not a value ranking — ${sentoraSentence}`,
   };
 }
 
