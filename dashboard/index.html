@@ -24,12 +24,19 @@
     <div class="chips" id="chips"></div>
   </section>
 
+  <section class="chart" id="chartPanel" hidden>
+    <h2>The fitted size curve — what the model actually prices from</h2>
+    <p class="note">Traded protocols (filled dots, observed market caps) against the fitted log-log curve (line), with the board's implied values (hollow dots, model outputs). All numbers come from data.js at load — nothing here is typed in.</p>
+    <div id="chart"></div>
+    <p class="note" id="chartCaption"></p>
+  </section>
+
   <section class="ladder" id="ladderPanel" hidden></section>
 
   <section class="top5" id="top5">
     <h2>Top launch candidates — ranked by expected value</h2>
-    <p class="note">The five highest <b>expected</b> values among rows with a FARM verdict at their sized deposit: implied launch value times the token odds.
-    Expected value is the number a farmer decides on. Stablecoins are left out here, flagged on the board below.</p>
+    <p class="note">The five highest <b>expected</b> values among rows with a FARM verdict at the plan deposit under a realistic 7.5% airdrop pool: implied launch value times the token odds.
+    Expected value is the number a farmer decides on. Stablecoins are left out here, flagged on the board below. If no row passes under a realistic pool, the five highest-EV THIN rows are shown instead, labelled as the closest passes.</p>
     <div id="top5List"></div>
   </section>
 
@@ -70,8 +77,9 @@
     peers gets a log-space blend of its own median and the global median, capped at twice the
     global median. A category with
     fewer than two peers falls back to the global median: one peer is not a category signal. The size
-    multiplier comes from a fitted curve: log(mcap) = 6.9646 + 0.5223&middot;log(TVL), fit by ordinary
-    least squares on the 128 traded protocols in this snapshot. The curve's own multiple is clamped
+    multiplier comes from a fitted curve: log(mcap) = intercept + slope&middot;log(TVL), fit by ordinary
+    least squares on the traded protocols in this snapshot — the fitted intercept and slope are
+    shown in the chart above, recomputed at run time from data.js, never typed in here. The curve's own multiple is clamped
     to [0.5&times;, 2&times;] of the peer multiple before it is applied. The clamp keeps the top rows credible.
     It is a prior, not a fit — the unbounded curve is the better held-out predictor, and the evidence strip above says so.
     Value saturates at $500M TVL (radar-7): a row above $500M is priced as if it held $500M, so Gauntlet, Nonce Capital, Sentora and Steakhouse Financial tie at $53,450,815, each labelled with its saturation multiplier. The old top-5 guardrail (multiples at or above ~0.08&times;) is retired above $500M TVL: traded giants here trade 0.0006&ndash;0.352&times;, median ~0.03&times; — Sentora at 0.019&times; sits between the 25th percentile and the median for its size band.</p>
@@ -83,7 +91,7 @@
     has a token rises with age mechanically — older protocols have had more time to launch — which says
     nothing about whether an old protocol with no token yet will launch next. Expected value is the
     implied launch value times the token odds. Every farm plan is costed — capital plus gas — and the
-    detail view shows the sized deposit, the break-even deposit and the verdict at that size, so the verdict is a number, not a feeling.</p>
+    detail view shows the plan deposit, the realistic and generous break-even deposits, and the verdict at the plan deposit, so the verdict is a number, not a feeling.</p>
     <p>Momentum, maturity and chain breadth were tested held-out and removed: with them the model
     predicts traded market caps with a median error of 4.20&times;; without them, 3.96&times; — so the
     simpler peer &times; size curve prices the board, and the three multipliers ship as 1.00 in every
@@ -104,15 +112,17 @@
     5.16&times;, closer 72.5%. Fit on 64 (before 2025-01-01), test on 31 (after): 2.85&times; vs
     4.91&times;, closer 71.0%. Two rolling-origin splits agree (2.76&times; vs 6.01&times;; 3.13&times; vs
     4.20&times;, closer 70.8% both). Listing-date check: fitting on protocols listed before 2023 / 2024 / 2025 and testing on those listed after gives median error 3.22x / 2.83x / 2.85x (closer than the peer median 69-73% of the time). This is a cohort split, not a historical backtest: it shows the model generalises to newer listings, not that it would have predicted prices at the time. The headline held-out number remains the leave-one-out median error, 3.94x.</p>
-    <p class="note"><b>How it's built.</b> The size curve is fitted by ordinary least squares on the 128 traded
+    <p class="note"><b>How it's built.</b> The size curve is fitted by ordinary least squares on the traded
     protocols in this snapshot; the peer multiples are medians from the same snapshot, never typed in.
     Held out, the adopted model predicts traded market caps with a median error of 3.94&times; against
     5.53&times; for the peer multiple alone, and the listing-date cohort check agrees at 3.22&times; /
     2.83&times; / 2.85&times; against peer 5.07&times; / 5.16&times; / 4.91&times;. The token odds are scored
     on 4-fold splits: Brier 0.1502 / AUC 0.650, against 0.1553 / 0.500 for the flat 19% rate. Every row
-    carries a costed farm plan with a solved break-even deposit and a verdict at the sized deposit.
-    The sized deposit is twice the break-even deposit, capped at ten times the plan deposit — so every
-    FARM row carries a positive expected net at its sized deposit.
+    carries a costed farm plan with a solved break-even deposit and a verdict judged at the plan
+    deposit under a realistic 7.5% airdrop pool — FARM only when the expected net at the plan deposit
+    is positive under that pool. The sized deposit (twice break-even, capped at ten times the plan
+    deposit) is a labelled generous upper bound; it no longer decides any verdict, so nothing is
+    positive by construction.
     The page re-derives every implied value and every token odds from data.js at load: 9/9 checks pass.
     The ledger accounts for all 758 protocols in the snapshot: 194 ranked + 148 excluded with a reason
     each + 416 with a token.</p>

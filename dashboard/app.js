@@ -200,25 +200,40 @@
   // Expected value is the implied launch value times the token odds: the number a farmer
   // actually decides on. The board itself stays sorted by implied value; this strip ranks
   // by what the launch is worth once the chance it happens is counted.
-  // Only FARM rows are featured: the strip shows the five highest expected values
-  // among rows whose verdict at the sized deposit is FARM.
-  var top5 = D.rows.filter(function (r) { return !r.stablecoin && r.farm_verdict === 'FARM'; })
+  // Only FARM rows are featured — verdicts judged at the plan deposit under a realistic
+  // 7.5% airdrop pool. If no row passes under a realistic pool (the honest outcome on
+  // most snapshots), the five highest-EV THIN rows are shown instead, clearly labelled
+  // as the closest passes — never silently hidden.
+  var top5Farm = D.rows.filter(function (r) { return !r.stablecoin && r.farm_verdict === 'FARM'; })
     .slice().sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || a.rank - b.rank; })
     .slice(0, 5);
-  document.getElementById('top5List').innerHTML = top5.map(function (r, i) {
+  var top5Fallback = top5Farm.length === 0;
+  var top5 = top5Farm;
+  if (top5Fallback) {
+    top5 = D.rows.filter(function (r) { return !r.stablecoin && r.farm_verdict === 'THIN'; })
+      .slice().sort(function (a, b) { return b.expected_value_usd - a.expected_value_usd || a.rank - b.rank; })
+      .slice(0, 5);
+  }
+  document.getElementById('top5List').innerHTML = (top5Fallback ?
+    '<p class="note"><b>No row passes at the plan deposit under a realistic 7.5% airdrop pool.</b> ' +
+    'The five highest-EV THIN rows are shown below as the closest passes — they break even only on the generous 100%-of-EV upper bound, not on a realistic pool.</p>' : '') +
+    top5.map(function (r, i) {
     return '<div class="top5card' + (i === 0 ? ' lead' : '') + '"><span class="top5ev">EV #' + (i + 1) + '</span> <span class="top5rank">board #' + r.rank + '</span><b>' + esc(r.name) + '</b>' +
       '<span class="top5val">' + usd(r.expected_value_usd) + '</span>' +
       '<span class="top5meta">expected · ' + usd(r.implied_value_usd) + ' implied &times; ' +
       Math.round(r.token_odds * 100) + '% token odds</span>' +
       '<span class="top5meta">' + esc(r.category || 'no category') + ' · ' + usd(r.tvl_usd) + ' TVL · ' +
-      'peer &times;' + r.peer_multiple.toFixed(2) + (r.peer_fallback ? ' (global)' : ' · n=' + r.peer_n) + '</span></div>';
+      'peer &times;' + r.peer_multiple.toFixed(2) + (r.peer_fallback ? ' (global)' : ' · n=' + r.peer_n) + '</span>' +
+      '<span class="top5meta">verdict ' + esc(r.farm_verdict || '') + ' · EV per TVL dollar $' + (r.farm_ev_per_dollar_usd != null ? r.farm_ev_per_dollar_usd.toFixed(4) : '—') + '</span></div>';
   }).join('');
 
   // ---- farm book: the board as one book, recomputed from data.js --------
-  // Totals across the board plus a sensitivity grid in the winners' style:
-  // median net at the sized deposit for deposit multipliers 0.5× / 1× / 2×
-  // of each row's own sized deposit, over the FARM rows. Net at deposit d is
-  // d × EV / TVL − gas, the same arithmetic the verdicts are built on.
+  // Totals across the board plus sensitivity grids in the winners' style.
+  // The verdicts are judged AT THE PLAN DEPOSIT under a realistic 7.5% airdrop
+  // pool, so the book is re-based on plan-deposit nets: the first grid is the
+  // realistic pool, the second is the generous 100%-of-EV upper bound at the
+  // sized deposit, labelled as such. Net at deposit d under a pool share s is
+  // d × EV × s / TVL − gas.
   function median(nums) {
     var a = nums.slice().sort(function (x, y) { return x - y; });
     var n = a.length;
@@ -249,27 +264,33 @@
     });
     var farmRows = D.rows.filter(function (r) { return r.farm_verdict === 'FARM'; });
     var medSized = median(D.rows.map(function (r) { return r.farm_sized_deposit_usd; }));
-    var medNet = median(D.rows.map(function (r) { return r.farm_net_at_sized_usd; }));
-    var farmCapital = farmRows.reduce(function (s, r) { return s + r.farm_sized_deposit_usd; }, 0);
+    var medNetPlan = median(D.rows.map(function (r) { return r.farm_net_at_plan_usd; }));
+    var medNetPlanReal = median(D.rows.map(function (r) { return r.farm_net_at_plan_realistic_usd; }));
+    var farmCapital = farmRows.reduce(function (s, r) { return s + r.farm_capital_usd; }, 0);
     totalsEl.innerHTML = countHtml.join('') +
-      '<span>Median sized deposit (board) <b>' + fmtInt(medSized) + '</b></span>' +
-      '<span>Median net at sized (board) <b>' + netUsd(medNet) + '</b></span>' +
-      '<span>Total sized capital, all FARM rows <b>' + fmtInt(farmCapital) + '</b></span>';
-    function netAt(r, k) {
+      '<span>Median net at plan, generous 100% of EV (board) <b>' + netUsd(medNetPlan) + '</b></span>' +
+      '<span>Median net at plan, realistic 7.5% pool (board) <b>' + netUsd(medNetPlanReal) + '</b></span>' +
+      '<span>Median sized deposit, generous upper bound (board) <b>' + fmtInt(medSized) + '</b></span>' +
+      '<span>Total plan capital, all FARM rows <b>' + fmtInt(farmCapital) + '</b></span>';
+    function netAtPlanReal(r, k) {
+      var share = r.farm_pool_share != null ? r.farm_pool_share : 0.075;
+      return k * r.farm_capital_usd * r.expected_value_usd * share / r.tvl_usd - r.farm_gas_usd;
+    }
+    function netAtSized(r, k) {
       return k * r.farm_sized_deposit_usd * r.expected_value_usd / r.tvl_usd - r.farm_gas_usd;
     }
     var mults = [0.5, 1, 2];
-    var head = '<tr><th>At sized deposit</th>' + mults.map(function (k) {
-      return '<th class="num">' + k + '× sized</th>';
-    }).join('') + '</tr>';
-    var medRow = '<tr><td>Median net, FARM rows</td>' + mults.map(function (k) {
-      return '<td class="num">' + netUsd(median(farmRows.map(function (r) { return netAt(r, k); }))) + '</td>';
-    }).join('') + '</tr>';
-    var capRow = '<tr><td>Total capital, FARM rows</td>' + mults.map(function (k) {
-      var tot = farmRows.reduce(function (s, r) { return s + k * r.farm_sized_deposit_usd; }, 0);
-      return '<td class="num">' + fmtInt(tot) + '</td>';
-    }).join('') + '</tr>';
-    gridEl.innerHTML = '<thead>' + head + '</thead><tbody>' + medRow + capRow + '</tbody>';
+    function netRow(label, netFn) {
+      return '<tr><td>' + esc(label) + '</td>' + mults.map(function (k) {
+        return '<td class="num">' + netUsd(median(farmRows.map(function (r) { return netFn(r, k); }))) + '</td>';
+      }).join('') + '</tr>';
+    }
+    gridEl.innerHTML = '<thead><tr><th>Median net, FARM rows</th>' + mults.map(function (k) {
+      return '<th class="num">' + k + '× deposit</th>';
+    }).join('') + '</tr></thead><tbody>' +
+      netRow('At the plan deposit — realistic 7.5% airdrop pool (the verdict basis)', netAtPlanReal) +
+      netRow('At the sized deposit — generous upper bound, 100% of EV (not the verdict basis)', netAtSized) +
+      '</tbody>';
   })();
 
   // ---- out-of-sample ladder: reads D.ladder; hidden when the model ships none ----
@@ -340,6 +361,85 @@
       '&times;</b> vs ' + h.peer_median_error_x.toFixed(2) + '&times; for the peer multiple alone; ' +
       mv + ' is closer ' + Math.round(h.win_rate_vs_peer * 100) + '% of the time. ' +
       'Token odds, 4-fold: Brier 0.150 / AUC 0.650.' + cohort;
+  })();
+
+  // ---- model chart: fitted size curve vs observed market caps, pure SVG ----
+  // Every number comes from data.js at load: D.size_curve (slope/intercept fitted
+  // at run time, never typed in), D.live (observed market caps of the traded
+  // comparables) and D.rows (the board's implied values, model outputs). The curve
+  // is drawn with the model's own natural-log formula: mcap = exp(intercept +
+  // slope * ln(TVL)). Axes are log10, from the data's own min/max. Degrades
+  // gracefully: no curve or no live rows hides the panel; no board rows shows a
+  // one-line note instead of an empty plot.
+  (function () {
+    var panel = document.getElementById('chartPanel');
+    var el = document.getElementById('chart');
+    var capEl = document.getElementById('chartCaption');
+    if (!panel || !el) return;
+    var sc = D.size_curve;
+    var live = (D.live || []).filter(function (p) { return p.tvl_usd > 0 && p.mcap_usd > 0; });
+    if (!sc || live.length === 0) { panel.hidden = true; return; }
+    panel.hidden = false;
+    var rows = D.rows.filter(function (r) { return r.tvl_usd > 0 && r.implied_value_usd > 0; });
+    var W = 720, H = 420, padL = 64, padR = 16, padT = 16, padB = 44;
+    var log10 = function (x) { return Math.log(x) / Math.LN10; };
+    var allX = live.map(function (p) { return p.tvl_usd; }).concat(rows.map(function (r) { return r.tvl_usd; }));
+    var allY = live.map(function (p) { return p.mcap_usd; }).concat(rows.map(function (r) { return r.implied_value_usd; }));
+    var xMin = Math.floor(log10(Math.min.apply(null, allX)));
+    var xMax = Math.ceil(log10(Math.max.apply(null, allX)));
+    var yMin = Math.floor(log10(Math.min.apply(null, allY)));
+    var yMax = Math.ceil(log10(Math.max.apply(null, allY)));
+    if (!(xMax > xMin)) xMax = xMin + 1;
+    if (!(yMax > yMin)) yMax = yMin + 1;
+    function X(tvl) { return padL + (log10(tvl) - xMin) / (xMax - xMin) * (W - padL - padR); }
+    function Y(v) { return padT + (1 - (log10(v) - yMin) / (yMax - yMin)) * (H - padT - padB); }
+    function tickLabel(power) {
+      var v = Math.pow(10, power);
+      if (v >= 1e9) return '$' + (v / 1e9) + 'B';
+      if (v >= 1e6) return '$' + (v / 1e6) + 'M';
+      return '$' + (v / 1e3) + 'K';
+    }
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Scatter of market cap against TVL with the fitted size curve">';
+    var p;
+    for (p = xMin; p <= xMax; p++) {
+      var gx = X(Math.pow(10, p));
+      s += '<line x1="' + gx.toFixed(1) + '" y1="' + padT + '" x2="' + gx.toFixed(1) + '" y2="' + (H - padB) + '" stroke="var(--border)" stroke-width="1"/>';
+      s += '<text x="' + gx.toFixed(1) + '" y="' + (H - padB + 18) + '" fill="var(--muted)" font-size="11" text-anchor="middle">' + tickLabel(p) + '</text>';
+    }
+    for (p = yMin; p <= yMax; p++) {
+      var gy = Y(Math.pow(10, p));
+      s += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-width="1"/>';
+      s += '<text x="' + (padL - 8) + '" y="' + (gy + 4).toFixed(1) + '" fill="var(--muted)" font-size="11" text-anchor="end">' + tickLabel(p) + '</text>';
+    }
+    s += '<text x="' + ((W - padL - padR) / 2 + padL).toFixed(1) + '" y="' + (H - 6) + '" fill="var(--muted)" font-size="12" text-anchor="middle">TVL (log scale)</text>';
+    s += '<text x="14" y="' + ((H - padT - padB) / 2 + padT).toFixed(1) + '" fill="var(--muted)" font-size="12" text-anchor="middle" transform="rotate(-90 14 ' + ((H - padT - padB) / 2 + padT).toFixed(1) + ')">Market cap / implied value (log scale)</text>';
+    // Fitted curve, sampled log-spaced across the plotted TVL range.
+    var pts = [];
+    var i, t;
+    for (i = 0; i <= 60; i++) {
+      t = Math.pow(10, xMin + (xMax - xMin) * i / 60);
+      var mcap = Math.exp(sc.intercept + sc.slope * Math.log(t));
+      if (isFinite(mcap) && mcap > 0) pts.push(X(t).toFixed(1) + ',' + Y(mcap).toFixed(1));
+    }
+    if (pts.length > 1) s += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="var(--green)" stroke-width="2"/>';
+    // Board rows first (underneath), hollow dots: model outputs, not observations.
+    rows.forEach(function (r) {
+      s += '<circle cx="' + X(r.tvl_usd).toFixed(1) + '" cy="' + Y(r.implied_value_usd).toFixed(1) + '" r="3.5" fill="none" stroke="var(--accent)" stroke-width="1.5"><title>' + esc(r.name) + ' — implied ' + usd(r.implied_value_usd) + '</title></circle>';
+    });
+    // Traded comparables on top, filled dots: observed market caps.
+    live.forEach(function (p) {
+      s += '<circle cx="' + X(p.tvl_usd).toFixed(1) + '" cy="' + Y(p.mcap_usd).toFixed(1) + '" r="4" fill="var(--blue)"><title>' + esc(p.name) + ' — market cap ' + usd(p.mcap_usd) + '</title></circle>';
+    });
+    s += '</svg>';
+    s += '<p class="note"><span style="color:var(--blue)">●</span> Observed market cap (traded comparables, n=' + live.length + ') &nbsp; ' +
+      '<span style="color:var(--green)">—</span> Fitted curve &nbsp; ' +
+      '<span style="color:var(--accent)">○</span> Board implied value (model output, n=' + rows.length + ')</p>';
+    if (rows.length === 0) s += '<p class="note">No board rows to plot.</p>';
+    el.innerHTML = s;
+    if (capEl) {
+      capEl.textContent = 'Fitted curve, recomputed at run time: log(mcap) = ' + sc.intercept.toFixed(4) + ' + ' + sc.slope.toFixed(4) + ' · log(TVL), on ' + sc.n_comps + ' traded comparables. ' +
+        'The curve is the size term of the model; the peer multiple moves each row at most one doubling from its category peer, and value saturates at $500M TVL.';
+    }
   })();
 
   // ---- coverage: how many rows price from their own category vs the global median --
@@ -467,11 +567,19 @@
         ' has ' + (r.peer_n === 0 ? 'no' : 'one') + ' trading peer' + (r.peer_n === 0 ? 's' : '') + ', so no category signal'
       : esc(r.category || 'no category') + ' peers, n=' + r.peer_n + (r.peer_n === 2 ? ' (log-space blend with the global median)' : '');
     // Sized deposit: the per-row deposit from the model (v6 data carries it on every row).
+    // It is a generous upper-bound deposit only; the verdict is judged at the plan deposit.
     var sized = (r.farm_sized_deposit_usd != null ? r.farm_sized_deposit_usd : r.farm_capital_usd);
-    // Net at the sized deposit is shown only when positive; a non-positive net is
-    // simply omitted — the dashboard never prints a signed net figure.
+    // Nets are always shown signed — never omitted when negative. The plan-deposit net
+    // under the realistic pool is the verdict basis; the generous 100%-of-EV net and the
+    // sized-deposit net are the upper bound, labelled as such.
+    var netPlan = r.farm_net_at_plan_usd;
+    var netPlanReal = r.farm_net_at_plan_realistic_usd;
+    var poolShare = r.farm_pool_share != null ? r.farm_pool_share : 0.075;
+    var netPlanTxt = netPlan != null ? 'Expected net at the plan deposit (generous upper bound, 100% of EV) <b>' + (netPlan >= 0 ? '+$' : '−$') + Math.abs(netPlan).toFixed(2) + '</b>. ' : '';
+    var netRealTxt = netPlanReal != null ? 'Under a realistic ' + Math.round(poolShare * 1000) / 10 + '% airdrop pool, expected net at the plan deposit <b>' + (netPlanReal >= 0 ? '+$' : '−$') + Math.abs(netPlanReal).toFixed(2) + '</b>. ' : '';
     var netSized = r.farm_net_at_sized_usd;
-    var netSizedTxt = (netSized != null && netSized > 0) ? 'Expected net at the sized deposit <b>+$' + netSized.toFixed(2) + '</b>. ' : '';
+    var netSizedTxt = (netSized != null) ? 'Expected net at the sized deposit (generous upper bound) <b>' + (netSized >= 0 ? '+$' : '−$') + Math.abs(netSized).toFixed(2) + '</b>. ' : '';
+    var evPerDollarTxt = r.farm_ev_per_dollar_usd != null ? 'EV per TVL dollar <b>$' + r.farm_ev_per_dollar_usd.toFixed(4) + '</b>. ' : '';
     box.innerHTML =
       '<h2>#' + r.rank + ' · ' + esc(r.name) + '</h2>' +
       '<p class="meta">' + esc(r.slug) + ' · ' + esc(r.category || 'no category') + ' · ' + esc(r.chains.join(', ')) +
@@ -479,9 +587,9 @@
       (r.on_watchlist ? ' · on the watchlist' : '') + '</p>' +
       (r.stablecoin ? '<p class="stable-note"><b>Stablecoin.</b> Its token already exists and trades, pegged, so this implied value is a model output, not a launch to farm. It stays on the board only because the watchlist floor requires it.</p>' : '') +
       '<div class="farm-verdict">' + farmBadge(r) + ' <b>Farm verdict: ' + esc(r.farm_verdict || '') + '.</b> ' +
-      'Sized deposit <b>' + fmtInt(sized) + '</b> — twice the break-even deposit, capped at ten times the plan deposit. ' +
-      'Break-even deposit <b>' + fmtInt(r.farm_break_even_usd) + '</b> — the deposit at which the expected net is zero ' +
-      '(D* = gas &times; TVL / EV). ' + netSizedTxt +
+      'Judged at the plan deposit <b>' + fmtInt(r.farm_capital_usd) + '</b> under a realistic ' + Math.round(poolShare * 1000) / 10 + '% airdrop pool. ' +
+      'Sized deposit <b>' + fmtInt(sized) + '</b> — a generous upper-bound deposit (twice the break-even deposit, capped at ten times the plan deposit), not the verdict basis. ' +
+      'Generous break-even deposit <b>' + fmtInt(r.farm_break_even_usd) + '</b> (D* = gas &times; TVL / EV) · realistic break-even deposit <b>' + fmtInt(r.farm_realistic_break_even_usd) + '</b> (D* / 7.5%). ' + netRealTxt + netPlanTxt + netSizedTxt + evPerDollarTxt +
       'Timeline ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days).</div>' +
       '<h3>Farm plan</h3>' +
       '<ol>' + r.farm_steps.map(function (s) {
@@ -489,8 +597,8 @@
         if (!m) return '<li>' + esc(s) + '</li>';
         return '<li>' + esc(m[1]) + ' <span class="cost">Cost: ' + esc(m[2]) + '.</span> <span class="time">Time: ' + esc(m[3]) + '.</span></li>';
       }).join('') + '</ol>' +
-      '<p class="verdict"><b>Farm verdict: ' + esc(r.farm_verdict || '') + '.</b> Sized deposit ' + fmtInt(sized) + ' · gas about $' + r.farm_gas_usd +
-      ' over the hold · break-even deposit ' + fmtInt(r.farm_break_even_usd) + ' (D* = gas &times; TVL / EV)' + (netSized != null && netSized > 0 ? ' · expected net at the sized deposit +$' + netSized.toFixed(2) : '') + ' · hold ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days).</p>' +
+      '<p class="verdict"><b>Farm verdict: ' + esc(r.farm_verdict || '') + '.</b> Plan deposit ' + fmtInt(r.farm_capital_usd) + ' · gas about $' + r.farm_gas_usd +
+      ' over the hold · generous break-even deposit ' + fmtInt(r.farm_break_even_usd) + ' (D* = gas &times; TVL / EV) · realistic break-even deposit ' + fmtInt(r.farm_realistic_break_even_usd) + ' · expected net at the plan deposit ' + (netPlanReal != null ? (netPlanReal >= 0 ? '+$' : '−$') + Math.abs(netPlanReal).toFixed(2) + ' under a realistic ' + Math.round(poolShare * 1000) / 10 + '% pool' : '—') + ' · hold ' + esc(r.farm_start_date || '') + ' &rarr; ' + esc(r.farm_end_date || '') + ' (' + r.farm_hold_days + ' days).</p>' +
       '<div class="model-grid">' +
       '<div class="cell"><span>Implied value</span><b>' + usd(r.implied_value_usd) + '</b><small>' + esc(formula) + '</small></div>' +
       '<div class="cell"><span>Token odds</span><b>' + Math.round(r.token_odds * 100) + '%</b><small>fitted logistic — ' + esc(oddsInputs) + '</small></div>' +

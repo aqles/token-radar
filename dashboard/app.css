@@ -43,6 +43,11 @@ h2 { font-size: 19px; margin: 0 0 10px; }
 .note { color: var(--muted); font-size: 13.5px; }
 .evidence { background: var(--surface2); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; font-size: 14px; max-width: 900px; }
 .evidence b { color: var(--accent); }
+/* Model chart: fitted size curve vs observed market caps, pure SVG. */
+.chart { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .note { margin: 8px 0 0; }
+
 /* Evidence + proof strip above the fold: the first thing under the header. */
 .evidence-top { margin-top: 20px; }
 .evidence-top .evidence { max-width: none; }
